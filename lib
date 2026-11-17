@@ -742,46 +742,53 @@ local function lucideProvider()
 	return LucideProvider
 end
 
-local function lucideImage(name, size)
-	local key = name .. "@" .. size
-	if LucideCache[key] ~= nil then return LucideCache[key] or nil end
-	local url = false
+local function lucideImage(name)
+	if LucideCache[name] ~= nil then return LucideCache[name] or nil end
+	local result = false
 	local provider = lucideProvider()
 	if provider then
-		-- The library may not carry every size, so fall back to its default size.
-		for _, request in { size, false } do
+		-- 48px cells downscale cleanly to our 14-20px icons; fall back to the library default.
+		for _, request in { 48, false } do
 			local ok, asset = pcall(provider, name, request or nil)
 			if ok and asset then
-				if type(asset) == "table" then asset = asset.Url or (asset.Id and "rbxassetid://" .. asset.Id) end
-				if type(asset) == "number" then asset = "rbxassetid://" .. asset end
-				if type(asset) == "string" then url = asset; break end
+				if type(asset) == "table" then
+					local url = asset.Url or (asset.Id and "rbxassetid://" .. asset.Id)
+					if url then result = { Image = url, RectSize = asset.ImageRectSize, RectOffset = asset.ImageRectOffset } end
+				elseif type(asset) == "number" then
+					result = { Image = "rbxassetid://" .. asset }
+				elseif type(asset) == "string" then
+					result = { Image = asset }
+				end
+				if result then break end
 			end
 		end
-		if not url and not LucideWarned[name] then
+		if not result and not LucideWarned[name] then
 			LucideWarned[name] = true
 			warn(('[Blossom] Unknown icon "%s"'):format(name))
 		end
 	end
-	LucideCache[key] = url
-	return url or nil
+	LucideCache[name] = result
+	return result or nil
 end
 
--- Raw asset ids pass through. "lucide:name" forces Lucide. A bare name uses the built-in
--- drawn icon when one exists, so existing code looks identical, and Lucide otherwise.
-local function imageFor(name, size)
-	if string.find(name, "rbxasset", 1, true) then return name end
+local function imageFor(name)
+	if string.find(name, "rbxasset", 1, true) then return { Image = name } end
 	local forced = string.match(name, "^lucide:(.+)$")
 	if not forced and Icons[name] then return nil end
-	return lucideImage(forced or name, size)
+	return lucideImage(forced or name)
 end
 
 local function makeIcon(parent, name, size, color, hole, props)
 	props = props or {}
 	local root = new("Frame", { Name = "Icon", Size = Offset(size, size), Position = props.Position, AnchorPoint = props.AnchorPoint, ZIndex = props.ZIndex }, parent)
 	local icon = { Root = root, Parts = {} }
-	local image = type(name) == "string" and imageFor(name, size)
+	local image = type(name) == "string" and imageFor(name)
 	if image then
-		local picture = new("ImageLabel", { Size = Dim2(1, 0, 1, 0), Image = image }, root)
+		local picture = new("ImageLabel", { Size = Dim2(1, 0, 1, 0), Image = image.Image }, root)
+		if image.RectSize then
+			picture.ImageRectSize = image.RectSize
+			picture.ImageRectOffset = image.RectOffset or Vector2.zero
+		end
 		bind(picture, "ImageColor3", color)
 		table.insert(icon.Parts, picture)
 	else
