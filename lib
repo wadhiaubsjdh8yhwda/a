@@ -38,7 +38,7 @@ local Metrics = {
 	Radius = 3, SmallRadius = 2, CardRadius = 4, PillRadius = 5, PopupRadius = 5, FloatRadius = 6, WindowRadius = 6,
 	WindowW = 586, WindowH = 466, MinWindowW = 520, MinWindowH = 380, SidebarW = 141, ContentX = 142, ColumnW = 207,
 	TabW = 121, TabH = 28, TabPitch = 32, CategoryToTab = 25, TabToCategory = 25, FirstCategory = 56, SearchH = 28,
-	Row = 16, HeaderH = 24, HeaderDescH = 40,
+	Row = 16, TopBar = 26, HeaderH = 24, HeaderDescH = 40,
 	DividerH = 9, SliderH = 33, DropdownH = 47, InputH = 26, ButtonH = 28, ListRowH = 24,
 	ToggleW = 28, ToggleH = 16, ToggleKnob = 10, Knob = 11, PickerKnob = 8, TrackH = 9, TrackY = 24, TrackInset = 5,
 	ChipH = 16, ValueChipH = 17, Swatch = 14, ChipGap = 2,
@@ -699,6 +699,8 @@ local Icons = {
 	grip = { { "f", 5.5, 11.3, 11, 1.5, FULL, -45 }, { "f", 10.2, 12.7, 5.6, 1.5, FULL, -45 } },
 	check = { { "f", 2, 8.4, 6.2, 2, FULL, 45 }, { "f", 5.2, 6.8, 10, 2, FULL, -45 } },
     chevron = { { "f", 2, 6.75, 7, 2, FULL, 45 }, { "f", 7, 6.75, 7, 2, FULL, -45 } },
+    minus = { { "f", 3, 7, 10, 2, FULL } },
+    close = { { "f", 1.5, 7, 13, 2, FULL, 45 }, { "f", 1.5, 7, 13, 2, FULL, -45 } },
 	layout = { { "f", 0.5, 1, 15, 4.5, 1 }, { "f", 0.5, 6.5, 7, 8.5, 1 }, { "f", 8.5, 6.5, 7, 8.5, 1 } },
 	reset = { { "r", 2.6, 2.6, 10.8, 10.8, FULL, 0, 1.8 }, { "h", 9.5, 0.5, 6, 5.5, 0 }, { "f", 9.2, 1.2, 4.6, 4.6, 0.5, 45 } },
 	logo = (function()
@@ -941,7 +943,7 @@ end
 
 function Column:ClampScroll()
 	-- Uses the window's own height so it's right on the same frame as a resize.
-	self.Target = math.clamp(self.Target, 0, math.max(0, self.ContentH - (self.Tab.Window.Height - Metrics.Pad * 2)))
+	self.Target = math.clamp(self.Target, 0, math.max(0, self.ContentH - (self.Tab.Window.Height - Metrics.TopBar - Metrics.Pad)))
 end
 
 function Column:ScrollTo(y)
@@ -2263,6 +2265,7 @@ end
 -- Input can reach the window background through anything above it, so check the pointer directly.
 function Window:_overControl(point)
 	if self.Search.Open then return true end
+    if inside(self.Controls, point) then return true end
 	if self.OpenDropdown and inside(self.OpenDropdown.Panel, point) then return true end
 	if self.ActivePopup and inside(self.ActivePopup.Frame, point) then return true end
 	if inside(self.SearchButton, point) then return true end
@@ -2618,6 +2621,10 @@ function Window:SetVisible(visible)
 	self.Visible = visible
 	self:CloseFloating()
 	self.ModalButton.Visible = visible
+    	if visible and self.Minimized then
+		self.Minimized = false
+		self.FloatFader:Hide()
+	end
 	if not self.Scale.Parent then
 		if not visible then self.Scale.Scale = 1 end
 		self.Scale.Parent = self.Holder
@@ -2638,6 +2645,53 @@ end
 
 function Window:Toggle()
 	self:SetVisible(not self.Visible)
+end
+
+function Window:_buildFloatButton()
+	local button = new("TextButton", {
+		Name = "Restore", Size = Offset(40, 40), Radius = FULL, Border = "Outline", BackgroundTransparency = 0,
+		Visible = false, Active = true,
+	}, self.Screen)
+	interactive(button, "Background", "Inline", "Element")
+	addShadow(button, "Large")
+	makeIcon(button, "logo", 20, "Accent", "Background", { Position = Offset(10, 10) })
+	button.InputBegan:Connect(function(input)
+		if not isClick(input) then return end
+		local start, origin, moved = mousePos(), button.Position, false
+		beginDrag(function(point)
+			local delta = point - start
+			if not moved and delta.Magnitude < 5 then return end
+			moved = true
+			self.Moved[button] = true
+			animate(button, "Position", self:_clamped(button, origin.X.Offset + delta.X, origin.Y.Offset + delta.Y), "Follow")
+		end, function()
+			if not moved then self:Restore() end
+		end)
+	end)
+	self.FloatButton = button
+	self.FloatFader = newFader(button)
+end
+
+function Window:Minimize()
+	if not self.Visible then return end
+	self:SetVisible(false)
+	self.Minimized = true
+	self.FloatFader:Show()
+end
+
+function Window:Restore()
+	self:SetVisible(true)
+end
+
+function Window:Close()
+	if self.Closing then return end
+	self.Closing = true
+	self:CloseFloating()
+	self.ModalButton.Visible = false
+	for _, frame in { self.Watermark, self.Hotkeys, self.FloatButton } do
+		if frame.Visible then newFader(frame):Hide() end
+	end
+	self.Fader:Hide(function() self:Destroy() end)
 end
 
 local ConfigMemory = {}
@@ -2882,6 +2936,9 @@ function Window:_placeOverlays()
 	if self.Watermark and not self.Moved[self.Watermark] then
 		self.Watermark.Position = Offset(floor((size.X - self.Watermark.Size.X.Offset) / 2), size.Y - 44)
 	end
+    if self.FloatButton and not self.Moved[self.FloatButton] then
+		self.FloatButton.Position = Offset(floor(size.X / 2) - 20, 16)
+	end
 	if self.Hotkeys and not self.Moved[self.Hotkeys] then self.Hotkeys.Position = Offset(14, floor((size.Y - 300) / 2)) end
 end
 
@@ -2899,6 +2956,28 @@ function Window:Destroy()
 	if Focus == self then Focus = nil end
 	if ScreenRef == self.Screen then ScreenRef = nil end
 	self.Screen:Destroy()
+end
+
+local function headerButton(parent, iconName, x, hoverColor)
+	local hovering = false
+	local button = new("TextButton", {
+		Position = Offset(x, 4), Size = Offset(18, 18), Radius = Metrics.Radius, BackgroundTransparency = 0,
+	}, parent)
+	bind(button, "BackgroundColor3", function() return hovering and Current.Inline or Current.Tab end)
+	local icon = makeIcon(button, iconName, 14, function()
+		if not hovering then return Current.InactiveText end
+		return hoverColor or Current.Text
+	end, "Tab", { Position = Offset(2, 2) })
+	hoverable(button, function()
+		hovering = true
+		refresh(button)
+		icon.Update()
+	end, function()
+		hovering = false
+		refresh(button)
+		icon.Update()
+	end)
+	return button
 end
 
 local Blossom = { Themes = Themes, ThemeOrder = ThemeOrder, Metrics = Metrics, Fonts = Fonts }
@@ -2967,10 +3046,15 @@ function Blossom.new(options)
 	local content = new("Frame", { Bg = "Tab", Position = Offset(Metrics.ContentX, 0), Size = Dim2(1, -Metrics.ContentX, 1, 0), Radius = Metrics.WindowRadius }, root)
 	new("Frame", { Name = "CornerPatch", Bg = "Tab", Size = Dim2(0, 12, 1, 0) }, content)
 	win.Pages = new("Frame", {
-		Name = "Pages", Position = Offset(0, Metrics.Pad), Size = Dim2(1, 0, 1, -Metrics.Pad * 2), ClipsDescendants = true,
+		Name = "Pages", Position = Offset(0, Metrics.TopBar), Size = Dim2(1, 0, 1, -(Metrics.TopBar + Metrics.Pad)), ClipsDescendants = true,
 	}, content)
 	win.Veil = new("Frame", { Bg = "Tab", BackgroundTransparency = 1, Size = Dim2(1, 0, 1, 0), ZIndex = 5 }, win.Pages)
-
+	local controls = new("Frame", {
+		Name = "Controls", AnchorPoint = Vec2(1, 0), Position = Dim2(1, -Metrics.Pad, 0, 0), Size = Offset(40, Metrics.TopBar), ZIndex = 3,
+	}, root)
+	win.Controls = controls
+	headerButton(controls, "minus", 0).MouseButton1Click:Connect(function() win:Minimize() end)
+	headerButton(controls, "close", 22, RGB(235, 95, 95)).MouseButton1Click:Connect(function() win:Close() end)
 	win.DragLayer = new("Frame", { Name = "Drag", Size = Dim2(1, 0, 1, 0), ZIndex = 30 }, screen)
 	win.Popups = new("Frame", { Name = "Popups", Size = Dim2(1, 0, 1, 0), ZIndex = 40 }, screen)
 	win.Dropdowns = new("Frame", { Name = "Dropdowns", Size = Dim2(1, 0, 1, 0), ZIndex = 45 }, screen)
@@ -2982,6 +3066,10 @@ function Blossom.new(options)
 	win:_buildPicker()
 	win:_buildSearch()
 	if options.Resizable ~= false then win:_buildResize() end
+    	win:_buildSearch()
+	if options.Resizable ~= false then win:_buildResize() end
+	win:_buildFloatButton()
+	win:_placeOverlays()
 	win:_placeOverlays()
 	win.WatermarkLayout()
 	table.insert(win.Connections, screen:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() win:_placeOverlays() end))
