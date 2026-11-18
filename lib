@@ -149,7 +149,7 @@ local Fonts = {
 local FontOrder = { "Inter", "Builder Sans", "Roboto", "Montserrat", "Source Sans Pro", "Ubuntu", "Nunito", "Arimo" }
 local WeightOrder = { "Regular", "Medium", "SemiBold", "Bold" }
 
-local Current = table.clone(Themes["Sakura Drift"])
+local Current = table.clone(Themes.Crimson)
 local Casing = "Normal"
 local FontFamily = INTER
 local BodyWeight = Enum.FontWeight.SemiBold
@@ -1049,7 +1049,7 @@ end
 local function attachKeybind(section, item, options)
 	local win = section.Window
 	local object = {
-		Key = options.Key, Mode = options.Mode or "Toggle", Listening = false, Enabled = true,
+		Key = options.Key, Mode = options.Mode or "Toggle", Listening = false, Enabled = not (TouchOnly and options.Gear),
 		OnPress = options.OnPress, OnRelease = options.OnRelease, Name = options.Name,
 	}
 	if TouchOnly and options.Gear then
@@ -3704,7 +3704,7 @@ function Blossom.new(options)
 	local globalEnv = typeof(getgenv) == "function" and getgenv() or nil
 	local previous = LastWindow or (globalEnv and globalEnv.__BlossomWindow)
 	if previous then pcall(previous.Destroy, previous) end
-	local themeName = Themes[options.Theme] and options.Theme or "Sakura Drift"
+	local themeName = Themes[options.Theme] and options.Theme or "Crimson"
 	for key, value in Themes[themeName] do Current[key] = value end
 	if options.Font then FontFamily = Fonts[options.Font] or options.Font end
 	if options.Lucide ~= nil then setLucide(options.Lucide) end
