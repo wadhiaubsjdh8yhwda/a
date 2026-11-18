@@ -747,7 +747,19 @@ local Icons = {
     ["status-error"] = { { "f", 0.5, 0.5, 15, 15, FULL }, { "h", 4.5, 7.2, 7, 1.6, FULL, 45 }, { "h", 4.5, 7.2, 7, 1.6, FULL, -45 } },
     ["status-warning"] = { { "f", 2.6, 2.6, 10.8, 10.8, 2, 45 }, { "h", 7.2, 4.4, 1.6, 4.6, FULL }, { "h", 7.2, 10, 1.6, 1.6, FULL } },
     ["status-info"] = { { "f", 0.5, 0.5, 15, 15, FULL }, { "h", 7.2, 4.2, 1.6, 1.6, FULL }, { "h", 7.2, 6.8, 1.6, 5, FULL } },
-	logo = { Glyph = { Text = "𝔪" } },
+	logo = (function()
+		local parts = { { "f", 0.6, 0.6, 14.8, 14.8, FULL } }
+		for arm = 0, 2 do
+			for step = 0, 3 do
+				local degrees = arm * 120 + step * 42
+				local angle, radius = math.rad(degrees), 6.3 - step * 1.45
+				local cx, cy = 8 + math.cos(angle) * radius, 8 + math.sin(angle) * radius
+				table.insert(parts, { "h", cx - 2, cy - 0.6, 4, 1.2, FULL, degrees + 118 })
+			end
+		end
+		table.insert(parts, { "h", 7, 7, 2, 2, FULL })
+		return parts
+	end)(),
 }
 
 -- Lucide (https://lucide.dev) through latte-soft/lucide-roblox: GetAsset(name, size) -> { Url = "rbxassetid://..." }.
@@ -823,17 +835,8 @@ local function makeIcon(parent, name, size, color, hole, props)
 	props = props or {}
 	local root = new("Frame", { Name = "Icon", Size = Offset(size, size), Position = props.Position, AnchorPoint = props.AnchorPoint, ZIndex = props.ZIndex }, parent)
 	local icon = { Root = root, Parts = {} }
-	local glyph = type(name) == "string" and Icons[name] and Icons[name].Glyph
-	local image = not glyph and type(name) == "string" and imageFor(name)
-	if glyph then
-		local letter = new("TextLabel", {
-			Size = Dim2(1, 0, 1, 0), Text = glyph.Text, TextScaled = true, Fg = color,
-			TextXAlignment = Enum.TextXAlignment.Center, TextYAlignment = Enum.TextYAlignment.Center,
-		}, root)
-		Cased[letter] = nil
-		if glyph.Font then letter.Font = glyph.Font end
-		table.insert(icon.Parts, letter)
-	elseif image then
+	local image = type(name) == "string" and imageFor(name)
+	if image then
 		local picture = new("ImageLabel", { Size = Dim2(1, 0, 1, 0), Image = image.Image }, root)
 		if image.RectSize then
 			picture.ImageRectSize = image.RectSize
