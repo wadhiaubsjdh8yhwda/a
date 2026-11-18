@@ -376,6 +376,11 @@ local function new(class, props, parent)
 		inst.TextXAlignment = Enum.TextXAlignment.Left
 		inst.TextYAlignment = Enum.TextYAlignment.Top
 	end
+    	if class == "ScrollingFrame" then
+		inst.ScrollBarThickness = 0
+		inst.ScrollBarImageTransparency = 1
+		inst.TopImage, inst.MidImage, inst.BottomImage = "", "", ""
+	end
 	local bg, fg, radius, border
 	if props then
 		for key, value in props do
@@ -2775,9 +2780,7 @@ function Window:_buildSearch()
 	bind(box, "PlaceholderColor3", "InactiveText")
 	local results = new("ScrollingFrame", {
 		Position = Offset(pad * 2, 88), Size = Offset(width - pad * 4 + 6, height - 88 - pad), CanvasSize = Offset(0, 0),
-		ScrollBarThickness = 2, ScrollBarImageTransparency = 0,
 	}, modal)
-	bind(results, "ScrollBarImageColor3", "Accent")
 
 	local noResults = centeredLabel(modal, width, { Fg = "InactiveText", Text = "No results", Y = 170 })
 	noResults.Visible = false
