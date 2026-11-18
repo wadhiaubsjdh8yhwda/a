@@ -732,6 +732,10 @@ local Icons = {
 		{ "h", 3.1, 10.6, 2.8, 2.8, FULL },
 	},
 	grip = { { "f", 5.5, 11.3, 11, 1.5, FULL, -45 }, { "f", 10.2, 12.7, 5.6, 1.5, FULL, -45 } },
+        discord = {
+        { "f", 1, 3, 14, 10, 4.5 }, { "f", 2.4, 1.8, 3.4, 3.4, 1, 45 }, { "f", 10.2, 1.8, 3.4, 3.4, 1, 45 },
+        { "h", 4.2, 6.6, 2.2, 3, FULL }, { "h", 9.6, 6.6, 2.2, 3, FULL },
+    },
 	check = { { "f", 2, 8.4, 6.2, 2, FULL, 45 }, { "f", 5.2, 6.8, 10, 2, FULL, -45 } },
     chevron = { { "f", 2, 6.75, 7, 2, FULL, 45 }, { "f", 7, 6.75, 7, 2, FULL, -45 } },
     minus = { { "f", 3, 7, 10, 2, FULL } },
@@ -3168,6 +3172,7 @@ end
 
 local B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 local CODE_PREFIX = "MYSTRIX:"
+local DISCORD_INVITE = "https://discord.gg/46JkThWjPB"
 
 local function b64encode(data)
 	local out = {}
@@ -3543,7 +3548,7 @@ local function headerButton(parent, iconName, x, hoverColor)
 	local icon = makeIcon(button, iconName, 14, function()
 		if not hovering then return Current.InactiveText end
 		return hoverColor or Current.Text
-	end, "Tab", { Position = Offset(2, 2) })
+	end, function() return hovering and Current.Inline or Current.Tab end, { Position = Offset(2, 2) })
 	hoverable(button, function()
 		hovering = true
 		refresh(button)
@@ -3767,11 +3772,18 @@ function Blossom.new(options)
 	}, content)
 	win.Veil = new("Frame", { Bg = "Tab", BackgroundTransparency = 1, Size = Dim2(1, 0, 1, 0), ZIndex = 5 }, win.Pages)
 	local controls = new("Frame", {
-		Name = "Controls", AnchorPoint = Vec2(1, 0), Position = Dim2(1, -Metrics.Pad, 0, 0), Size = Offset(40, Metrics.TopBar), ZIndex = 3,
+		Name = "Controls", AnchorPoint = Vec2(1, 0), Position = Dim2(1, -Metrics.Pad, 0, 0), Size = Offset(62, Metrics.TopBar), ZIndex = 3,
 	}, root)
 	win.Controls = controls
-	headerButton(controls, "minus", 0).MouseButton1Click:Connect(function() win:Minimize() end)
-	headerButton(controls, "close", 22, RGB(235, 95, 95)).MouseButton1Click:Connect(function() win:Close() end)
+	headerButton(controls, "discord", 0, RGB(114, 137, 218)).MouseButton1Click:Connect(function()
+		if copyToClipboard(DISCORD_INVITE) then
+			win:Notify("Discord invite copied to clipboard.")
+		else
+			win:Notify("Clipboard unavailable on this executor.", "Warning")
+		end
+	end)
+	headerButton(controls, "minus", 22).MouseButton1Click:Connect(function() win:Minimize() end)
+	headerButton(controls, "close", 44, RGB(235, 95, 95)).MouseButton1Click:Connect(function() win:Close() end)
 	win.DragLayer = new("Frame", { Name = "Drag", Size = Dim2(1, 0, 1, 0), ZIndex = 30 }, screen)
 	win.Popups = new("Frame", { Name = "Popups", Size = Dim2(1, 0, 1, 0), ZIndex = 40 }, screen)
 	win.Dropdowns = new("Frame", { Name = "Dropdowns", Size = Dim2(1, 0, 1, 0), ZIndex = 45 }, screen)
