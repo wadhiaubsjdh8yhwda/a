@@ -1173,6 +1173,7 @@ end
 -- Every element joins configs automatically under Tab/Section/Name unless NoSave is set.
 local function register(section, object, options, item)
 	local win = section.Window
+	if options.Description then win:_describe(item, options.Description) end
 	win.FlagOwners[item] = object
 	if options.NoSave then return nil end
 	local base = options.Flag or (section.Tab.Name .. "/" .. section.Name .. "/" .. tostring(options.Name or item.Kind))
@@ -1265,6 +1266,7 @@ end
 function Section:Label(options)
 	local name = options.Name or options.Text
 	local item = self:_item(Metrics.Row, "Label", name, false)
+    if options.Description then self.Window:_describe(item, options.Description) end
 	local text = label(item.Frame, { Text = name, Truncate = Enum.TextTruncate.AtEnd })
 	item.Label = text
 	local object = { Item = item, Instance = text }
@@ -1734,6 +1736,7 @@ end
 
 function Section:Button(options)
 	local item = self:_item(Metrics.ButtonH, "Button", options.Name)
+	if options.Description then self.Window:_describe(item, options.Description) end
 	local win = self.Window
 	local button = new("TextButton", { Position = Offset(1, 1), Size = Dim2(1, -2, 0, Metrics.ButtonH - 2), Radius = Metrics.Radius, Border = "Outline", BackgroundTransparency = 0 }, item.Frame)
 	interactive(button, "Element", "HoveredElement", "Inline")
@@ -3432,6 +3435,89 @@ function Window:_buildHotkeys()
 	self:_makeDraggable(head, holder)
 end
 
+local TextService = game:GetService("TextService")
+
+function Window:_describe(item, text)
+	item.Description = text
+	table.insert(self.Described, item)
+end
+
+function Window:_buildTooltip()
+	local frame = new("Frame", { Bg = "Background", Border = "Outline", Radius = Metrics.FloatRadius, Size = Offset(40, 24), Visible = false }, self.Tooltips)
+	local text = new("TextLabel", { Fg = "Text", TextSize = 11, TextWrapped = true, Text = "", Position = Offset(8, 6), Size = Offset(20, 12) }, frame)
+	self.Tip = { Frame = frame, Text = text, Fader = newFader(frame), Shown = false, Item = nil, Since = 0 }
+end
+
+function Window:_tipContent(text)
+	local tip = self.Tip
+	local params = Instance.new("GetTextBoundsParams")
+	params.Text = applyCase(text)
+	params.Font = fontOf(nil)
+	params.Size = 11
+	params.Width = 190
+	local ok, bounds = pcall(TextService.GetTextBoundsAsync, TextService, params)
+	if not ok then bounds = Vec2(190, 14) end
+	local width, height = math.ceil(bounds.X) + 2, math.ceil(bounds.Y)
+	setText(tip.Text, text)
+	tip.Text.Size = Offset(width, height)
+	tip.Frame.Size = Offset(width + 16, height + 12)
+end
+
+function Window:_tipPlace(animated)
+	local tip = self.Tip
+	local size = tip.Frame.Size
+	local viewport = self.Screen.AbsoluteSize / LayerScale
+	local mouse = toLayer(mousePos())
+	local x = math.clamp(floor(mouse.X + 14), 8, math.max(8, viewport.X - size.X.Offset - 8))
+	local y = mouse.Y + 18
+	if y + size.Y.Offset > viewport.Y - 8 then y = mouse.Y - size.Y.Offset - 10 end
+	place(tip.Frame, "Position", Offset(x, math.max(8, floor(y))), animated, "Follow")
+end
+
+function Window:_hideTooltip()
+	local tip = self.Tip
+	if not tip.Shown then return end
+	tip.Shown = false
+	tip.Fader:Hide()
+end
+
+function Window:_updateTooltip()
+	local tip = self.Tip
+	local target
+	local blocked = not self.Visible or self.Closing or TouchOnly or self.Search.Open or self.OpenDropdown or self.ActivePopup
+		or self.Listening or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+	if not blocked and self.CurrentTab then
+		local point = mousePos()
+		for _, item in self.Described do
+			local section = item.Section
+			if item.Visible and section.Tab == self.CurrentTab and not section.Collapsed and not section.Dragging
+				and inside(item.Frame, point) and inside(section.Column.Scroll, point) then
+				target = item
+				break
+			end
+		end
+	end
+	if target ~= tip.Item then
+		tip.Item = target
+		tip.Since = os.clock()
+		if not target then
+			self:_hideTooltip()
+		elseif tip.Shown then
+			self:_tipContent(target.Description)
+			self:_tipPlace(false)
+		end
+	end
+	if not target then return end
+	if tip.Shown then
+		self:_tipPlace(true)
+	elseif os.clock() - tip.Since >= 0.4 then
+		tip.Shown = true
+		self:_tipContent(target.Description)
+		self:_tipPlace(false)
+		tip.Fader:Show()
+	end
+end
+
 -- Everything anchored to the screen is placed at whole pixels, the main defence against blurry text.
 function Window:_placeOverlays()
 	local size = self.Screen.AbsoluteSize
@@ -3645,7 +3731,7 @@ function Blossom.new(options)
 		SidebarW = Metrics.SidebarW, SidebarOpenW = Metrics.SidebarW, SidebarAnim = Metrics.SidebarW, SidebarCollapsed = false,
 		ResizeJobs = {}, ResizeHandles = {},
 		Title = options.Title or "Blossom", Tabs = {}, Sections = {}, Columns = {}, Index = {}, Binds = {}, Colors = {}, Flags = {},
-		ThemeRows = {}, HotkeyEntries = {}, HotkeyOrder = {}, NotifyStack = {}, Connections = {}, Jobs = {}, Moved = {}, PendingThemeKeys = {}, FlagOwners = {},
+		ThemeRows = {}, HotkeyEntries = {}, HotkeyOrder = {}, NotifyStack = {}, Connections = {}, Jobs = {}, Moved = {}, PendingThemeKeys = {}, FlagOwners = {},Described = {},
 		ThemeClock = 0, SidebarY = Metrics.FirstCategory, SidebarItems = {}, IndicatorOn = false,
 		Visible = true, ThemeName = themeName, MenuKey = options.MenuKey or Enum.KeyCode.RightShift,
 		LastPopupTime = 0, DropdownClosedAt = 0,
@@ -3705,12 +3791,14 @@ function Blossom.new(options)
 	win.Popups = new("Frame", { Name = "Popups", Size = Dim2(1, 0, 1, 0), ZIndex = 40 }, screen)
 	win.Dropdowns = new("Frame", { Name = "Dropdowns", Size = Dim2(1, 0, 1, 0), ZIndex = 45 }, screen)
 	win.Notifications = new("Frame", { Name = "Notifications", Position = Offset(16, 16), Size = Dim2(1, -32, 1, -32), ZIndex = 50 }, screen)
+    win.Tooltips = new("Frame", { Name = "Tooltips", Size = Dim2(1, 0, 1, 0), ZIndex = 55 }, screen)
 
 	win.Fit = 1
 	win.Layers = {}
-	for _, layer in { win.DragLayer, win.Popups, win.Dropdowns } do
+	for _, layer in { win.DragLayer, win.Popups, win.Dropdowns, win.Tooltips } do
 		table.insert(win.Layers, { Frame = layer, Scale = new("UIScale", nil, layer) })
 	end
+    win:_buildTooltip()
 	win:_buildWatermark(options)
 	win:_buildHotkeys()
 	win:_buildKeybindMenu()
@@ -3803,6 +3891,7 @@ function Blossom.new(options)
 		clock += dt
 		colorClock += dt
 		win:_flushThemeColors(dt)
+        win:_updateTooltip()
         local load = win.Load
 		if load and load.Active and load.Busy == 0 then
 			local idle = os.clock() - load.Last
