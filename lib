@@ -3176,7 +3176,82 @@ function Window:DeleteConfig(name)
 	ConfigMemory[name] = nil
 end
 
-local AUTOLOAD_PATH = "Blossom/autoload.txt"
+local B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local CODE_PREFIX = "MYSTRIX:"
+
+local function b64encode(data)
+	local out = {}
+	for i = 1, #data, 3 do
+		local a, b, c = string.byte(data, i, i + 2)
+		local n = a * 65536 + (b or 0) * 256 + (c or 0)
+		local i1, i2, i3, i4 = floor(n / 262144) % 64, floor(n / 4096) % 64, floor(n / 64) % 64, n % 64
+		table.insert(out, string.sub(B64, i1 + 1, i1 + 1) .. string.sub(B64, i2 + 1, i2 + 1)
+			.. (b and string.sub(B64, i3 + 1, i3 + 1) or "=") .. (c and string.sub(B64, i4 + 1, i4 + 1) or "="))
+	end
+	return table.concat(out)
+end
+
+local function b64decode(text)
+	text = (string.gsub(text, "[^%w%+/]", ""))
+	local out = {}
+	for i = 1, #text, 4 do
+		local chunk = string.sub(text, i, i + 3)
+		local count, n = #chunk, 0
+		for j = 1, 4 do
+			local ch = string.sub(chunk, j, j)
+			local index = ch ~= "" and string.find(B64, ch, 1, true) or nil
+			n = n * 64 + (index and index - 1 or 0)
+		end
+		local bytes = string.char(floor(n / 65536) % 256, floor(n / 256) % 256, n % 256)
+		if count == 4 then
+			table.insert(out, bytes)
+		elseif count == 3 then
+			table.insert(out, string.sub(bytes, 1, 2))
+		elseif count == 2 then
+			table.insert(out, string.sub(bytes, 1, 1))
+		end
+	end
+	return table.concat(out)
+end
+
+local function copyToClipboard(text)
+	local copy = (typeof(setclipboard) == "function" and setclipboard) or (typeof(toclipboard) == "function" and toclipboard)
+		or (typeof(syn) == "table" and syn.write_clipboard)
+	if not copy then return false end
+	return pcall(copy, text)
+end
+
+local function readConfig(name)
+	if typeof(readfile) == "function" and typeof(isfile) == "function" and isfile(configPath(name)) then
+		return readfile(configPath(name))
+	end
+	return ConfigMemory[name]
+end
+
+function Window:ExportConfig(name)
+	local json
+	if name then
+		json = readConfig(name)
+		if not json then return nil end
+	else
+		json = self:_serialize()
+	end
+	return CODE_PREFIX .. b64encode(json)
+end
+
+function Window:ImportConfig(code)
+	code = string.gsub(tostring(code), "^%s+", "")
+	code = string.gsub(code, "%s+$", "")
+	if string.sub(code, 1, #CODE_PREFIX) ~= CODE_PREFIX then return false end
+	local json = b64decode(string.sub(code, #CODE_PREFIX + 1))
+	local ok = pcall(function()
+		self:_deserialize(json)
+	end)
+	self.Restoring = false
+	return ok
+end
+
+local AUTOLOAD_PATH = "Mystrix/autoload.txt"
 local AutoloadMemory
 
 local function readAutoload()
@@ -3234,6 +3309,29 @@ function Window:BuildSettings(tab)
 			self:SaveConfig(selected)
 			self:Notify(('Overwrote "%s".'):format(selected))
 		end
+	end })
+	local importBox
+	profiles:Button({ Name = "Export", Callback = function()
+		local code = self:ExportConfig(selected)
+		if not code then
+			self:Notify("Could not export that config.", "Error")
+			return
+		end
+		if copyToClipboard(code) then
+			self:Notify(selected and ('Copied "%s" code to clipboard.'):format(selected) or "Copied current settings code to clipboard.")
+		else
+			importBox:Set(code, true)
+			self:Notify("Clipboard unavailable, code placed in the box below.", "Warning")
+		end
+	end })
+	importBox = profiles:Textbox({ Placeholder = "Paste config code", NoSave = true, Callback = function(text)
+		if text == "" then return end
+		if self:ImportConfig(text) then
+			self:Notify("Imported config.")
+		else
+			self:Notify("Invalid config code.", "Error")
+		end
+		importBox:Set("", true)
 	end })
 
 	local function storeAutoload() writeAutoload(autoloadOn and autoloadName or nil) end
