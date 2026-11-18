@@ -1,25 +1,3 @@
---!nocheck
---[[
-	Blossom UI Library (single file)
-
-	local Blossom = loadstring(readfile("Blossom.luau"))()      -- executor
-	local Blossom = require(path.to.Blossom)                    -- Studio
-
-	local Window = Blossom.new({ Title = "Blossom", Script = "blossom.lua", Build = "operation one" })
-	Window:Category("Combat")
-	local Rage = Window:Tab({ Name = "Rage", Icon = "target" })
-	local Main = Rage:Section({ Name = "Main", Icon = "robot", Side = 1 })
-	Main:Toggle({ Name = "Enabled", Default = true, Keybind = Enum.KeyCode.C, Callback = print })
-
-	Elements: Toggle, Slider, RangeSlider, Dropdown, Colorpicker, Keybind, Button,
-	          Textbox, Label, Divider, Listbox.
-	Toggle and Label also accept Keybind = and Color = for inline controls.
-	Every element returns an object with .Value and :Set(value, silent).
-
-	Options for Blossom.new: Title, Script, Build, Theme, MenuKey, Font (a font family string),
-	Size and MinSize (Vector2), Resizable (default true). Window:SetSize(width, height) resizes from code.
-]]
-
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
@@ -33,7 +11,7 @@ local RGB = Color3.fromRGB
 local floor, round = math.floor, math.round
 local FULL = 99
 
--- Spacing rule: Pad around every surface, Gap between stacked items. Sizes are even so centring stays on whole pixels.
+
 local Metrics = {
 	Pad = 10, Gap = 6, SectionGap = 10,
 	Radius = 3, SmallRadius = 2, CardRadius = 4, PillRadius = 5, PopupRadius = 5, FloatRadius = 6, WindowRadius = 6,
@@ -135,18 +113,13 @@ local NotifyTypes = {
 	Error = { Icon = "status-error", Color = function() return RGB(235, 95, 95) end, Duration = 5 },
 }
 
--------------------------------------------------------------------------------
--- Animator: one render-step loop driving springs. Retargeting keeps velocity,
--- so interrupted motion stays continuous, and it costs far less than TweenService.
--------------------------------------------------------------------------------
-
 local Presets = {
-	Fast = { W = 42, Z = 1 },      -- hover and colour feedback
-	Knob = { W = 44, Z = 0.86 },   -- toggles and slider knobs
-	Follow = { W = 34, Z = 1 },    -- things attached to the pointer
-	Smooth = { W = 26, Z = 1 },    -- layout and popups
-	Soft = { W = 19, Z = 1 },      -- page transitions, theme morphs
-	Settle = { W = 24, Z = 0.8 },  -- small overshoot for reflow
+	Fast = { W = 42, Z = 1 },
+	Knob = { W = 44, Z = 0.86 },
+	Follow = { W = 34, Z = 1 },
+	Smooth = { W = 26, Z = 1 },
+	Soft = { W = 19, Z = 1 },
+	Settle = { W = 24, Z = 0.8 },
 }
 
 local Active, Tracks, Jobs = {}, {}, {}
@@ -272,10 +245,6 @@ local function ensureLoop()
 		sweepHover()
 	end)
 end
-
--------------------------------------------------------------------------------
--- Theme, casing and font registries
--------------------------------------------------------------------------------
 
 local Bound, ByKey, Dynamic, Cased, NoFade = {}, {}, {}, {}, {}
 
@@ -419,8 +388,6 @@ local function new(class, props, parent)
 	return inst
 end
 
--- Top-aligned text at a computed whole-pixel offset. Roblox blurs glyphs that land on half pixels,
--- which is what centred alignment produces when the free space is odd.
 local function capOffset(rowH, size)
 	local capHeight = round(size * 0.7)
 	return math.ceil((rowH - capHeight) / 2 - round(size * 0.16))
@@ -437,14 +404,11 @@ local function label(parent, o)
 	}, parent)
 end
 
--- Centres text inside a fixed width using its measured bounds, floored to a whole pixel.
 local function centeredLabel(parent, width, o)
 	o.Truncate = Enum.TextTruncate.AtEnd
 	local text = label(parent, o)
 	local y, rowH = text.Position.Y.Offset, o.RowH or Metrics.Row
 	local function fit()
-		-- The box keeps the full available width. Sizing a truncating label from its own
-		-- bounds shrinks it further each time, because truncated text measures narrower.
 		text.Size = Offset(width - 12, rowH)
 		text.Position = Offset(floor((width - math.min(math.ceil(text.TextBounds.X), width - 12)) / 2), y)
 	end
@@ -464,13 +428,11 @@ local function addGradient(inst)
 	return gradient
 end
 
--- Native UIShadow styles, fitted to the original: a CSS-like blur (2 sigma) with Spread split across both sides.
 local Shadows = {
-	Large = { Blur = 10, Spread = 0, Transparency = 0.3 },    -- window and popup windows
-	PickerKnob = { Blur = 6, Spread = 6, Transparency = 0.5 }, -- colour picker knobs only
+	Large = { Blur = 10, Spread = 0, Transparency = 0.3 },
+	PickerKnob = { Blur = 6, Spread = 6, Transparency = 0.5 },
 }
 
--- UIShadow is still rolling out, so clients without it simply draw no shadow.
 local ShadowsAvailable = pcall(function() Instance.new("UIShadow"):Destroy() end)
 
 local function addShadow(inst, style)
@@ -506,8 +468,6 @@ local function isClick(input)
 	return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
 end
 
--- AbsolutePosition and GetMouseLocation use different origins whenever a top bar inset exists.
--- Offsetting by the ScreenGui's own AbsolutePosition puts the pointer in AbsolutePosition space.
 local ScreenRef
 local Focus
 local LayerScale = 1
@@ -530,7 +490,6 @@ local function inside(frame, point, margin)
 	return point.X >= p.X - margin and point.X <= p.X + s.X + margin and point.Y >= p.Y - margin and point.Y <= p.Y + s.Y + margin
 end
 
--- Polls once per rendered frame, so dragging costs one update per frame however fast the mouse reports.
 local function lockScrolling(locked)
 	if not TouchOnly or not Focus then return end
 	for _, tab in Focus.Tabs do
@@ -565,8 +524,6 @@ local function beginDrag(onMove, onEnd, onFrame)
 	end)
 end
 
--- Roblox skips MouseLeave on fast movement and fires MouseEnter for covered objects, so hover
--- is confirmed against the pointer every frame instead of trusting those events alone.
 local HoverSet = {}
 
 local function isShown(inst)
@@ -618,10 +575,6 @@ function sweepHover()
 	end
 end
 
--------------------------------------------------------------------------------
--- Fader: one animated alpha drives every transparency beneath a root
--------------------------------------------------------------------------------
-
 local Fader = {}
 Fader.__index = Fader
 
@@ -632,7 +585,6 @@ end
 local function captureFade(root)
 	local entries = {}
 	local function add(inst, prop)
-		-- A value that's still animating would be restored stale when the fade ends.
 		if NoFade[inst] or (Tracks[inst] and Tracks[inst][prop]) then return end
 		local base = inst[prop]
 		if base < 1 then table.insert(entries, { inst, prop, base }) end
@@ -691,11 +643,6 @@ function Fader:Hide(onDone, preset)
 		end,
 	})
 end
-
--------------------------------------------------------------------------------
--- Icons: drawn from frames on a 16x16 grid, so no decals have to be uploaded
--- { kind, x, y, w, h, radius, rotation }   kind: f = fill, h = hole, r = ring
--------------------------------------------------------------------------------
 
 local Icons = {
 	target = { { "f", 0.5, 0.5, 15, 15, FULL }, { "h", 3, 3, 10, 10, FULL }, { "f", 4.8, 4.8, 6.4, 6.4, FULL } },
@@ -762,8 +709,6 @@ local Icons = {
 	end)(),
 }
 
--- Lucide (https://lucide.dev) through latte-soft/lucide-roblox: GetAsset(name, size) -> { Url = "rbxassetid://..." }.
--- Loaded lazily, so nothing is fetched unless an icon actually needs it.
 local LUCIDE_URL = "https://github.com/latte-soft/lucide-roblox/releases/latest/download/lucide-roblox.luau"
 local LucideProvider, LucideResolved = nil, false
 local LucideCache, LucideWarned = {}, {}
@@ -797,7 +742,6 @@ local function lucideImage(name)
 	local result = false
 	local provider = lucideProvider()
 	if provider then
-		-- 48px cells downscale cleanly to our 14-20px icons; fall back to the library default.
 for _, candidate in { name, "lucide-" .. name } do
 	for _, request in { 48, false } do
 		local ok, asset = pcall(provider, candidate, request or nil)
@@ -869,7 +813,6 @@ local function makeIcon(parent, name, size, color, hole, props)
 	return icon
 end
 
--- Hover and press colours resolved through the theme, so a theme change can't strand a stale colour.
 local function interactive(target, base, hover, press, handle)
 	local state = { Hover = false, Press = false }
 	local source = handle or target
@@ -885,10 +828,6 @@ local function interactive(target, base, hover, press, handle)
 	end
 	return state
 end
-
--------------------------------------------------------------------------------
--- Classes
--------------------------------------------------------------------------------
 
 local Window, Tab, Section, Column = {}, {}, {}, {}
 Window.__index, Tab.__index, Section.__index, Column.__index = Window, Tab, Section, Column
@@ -919,7 +858,6 @@ local function makeChip(parent, text, anchorRight, outerHeight)
 	return chip, caption
 end
 
--- Sizes a chip around its text. Widths given to onFit are outer widths, borders included.
 local function fitChip(chip, text, minimum, onFit)
 	local height = chip.Size.Y.Offset
 	local function apply(bounds)
@@ -935,7 +873,6 @@ local function fitChip(chip, text, minimum, onFit)
 	return apply, fit
 end
 
--- Click a slider amount to type a value; Enter or clicking away commits, anything non-numeric reverts.
 local function makeEditable(chip, text, read, write, apply, fit)
 	local height = chip.Size.Y.Offset
 	local hit = new("TextButton", { Size = Dim2(1, 0, 1, 0), ZIndex = 2 }, chip)
@@ -970,10 +907,6 @@ local function makeEditable(chip, text, read, write, apply, fit)
 	end)
 end
 
--------------------------------------------------------------------------------
--- Column
--------------------------------------------------------------------------------
-
 function Column:Layout(animated)
 	local y = 0
 	for _, section in self.Sections do
@@ -989,7 +922,6 @@ function Column:Layout(animated)
 end
 
 function Column:ClampScroll()
-	-- Uses the window's own height so it's right on the same frame as a resize.
 	self.Target = math.clamp(self.Target, 0, math.max(0, self.ContentH - (self.Tab.Window.Height - Metrics.TopBar - Metrics.Pad)))
 end
 
@@ -998,10 +930,6 @@ function Column:ScrollTo(y)
 	self:ClampScroll()
 	animate(self.Scroll, "CanvasPosition", Vec2(0, self.Target), "Soft")
 end
-
--------------------------------------------------------------------------------
--- Section
--------------------------------------------------------------------------------
 
 function Section:Layout(animated)
 	local y, any = Metrics.Pad, false
@@ -1170,7 +1098,6 @@ local function addInlineControls(section, item, options, name)
 	return keybind, color
 end
 
--- Every element joins configs automatically under Tab/Section/Name unless NoSave is set.
 local function register(section, object, options, item)
 	local win = section.Window
 	if options.Description then win:_describe(item, options.Description) end
@@ -1323,7 +1250,6 @@ local function knobPixels(alpha, width)
 	return round(Metrics.TrackInset + alpha * (width - Metrics.TrackInset * 2))
 end
 
--- Pixel positions keep the knob centred exactly: the same overhang above and below the track.
 local function placeKnob(knob, pixels, animated)
 	place(knob, "Position", Offset(pixels - floor(Metrics.Knob / 2), floor((Metrics.TrackH - 2 - Metrics.Knob) / 2)), animated, "Follow")
 end
@@ -1551,7 +1477,6 @@ local function buildDropdown(win, parent, options)
 		setText(value, caption())
 	end
 
-	-- Hides rows that don't match the search text and packs the rest from the top.
 	local function applyFilter()
 		local needle = string.lower(query)
 		local shown = 0
@@ -1899,7 +1824,6 @@ function Section:_beginDrag(immediate)
 
 	local function frame(point)
 		if not lifted then return end
-		-- Scroll the column while the pointer rests near its top or bottom edge.
 		local column = self.Column
 		local scroll = column.Scroll
 		local top, bottom = scroll.AbsolutePosition.Y, scroll.AbsolutePosition.Y + scroll.AbsoluteSize.Y
@@ -1933,10 +1857,6 @@ function Section:_beginDrag(immediate)
 		})
 	end, frame)
 end
-
--------------------------------------------------------------------------------
--- Tab
--------------------------------------------------------------------------------
 
 function Tab:Section(options)
 	self.Window:_tick("Section", options.Name)
@@ -1993,10 +1913,6 @@ function Tab:Section(options)
 	return section
 end
 
--------------------------------------------------------------------------------
--- Window
--------------------------------------------------------------------------------
-
 local function guiParent(screen)
 	local ok = false
 	if typeof(gethui) == "function" then
@@ -2044,7 +1960,6 @@ function Window:_layoutSidebar(animated)
 			end
 		end
 	end
-	-- Height is measured from the fully expanded list, so expanding never overlaps the search box.
 	self.SidebarY = fullY
 	self:_syncIndicator(animated)
 end
@@ -2241,7 +2156,6 @@ function Window:_notifyAnchor()
 	return Vec2(self.NotifyRight and 1 or 0, self.NotifyBottom and 1 or 0)
 end
 
--- slide is how far the card sits outside its resting spot, towards the nearest side edge.
 function Window:_notifyPosition(slot, slide)
 	local right, bottom, offset = self.NotifyRight, self.NotifyBottom, slot * 36
 	return Dim2(right and 1 or 0, right and slide or -slide, bottom and 1 or 0, bottom and -offset or offset)
@@ -2294,7 +2208,6 @@ function Window:Notify(options, typeName)
 	end
 	stack()
 	entry.Fader:Show()
-	-- Rapid actions shouldn't bury the screen.
 	if #self.NotifyStack > 6 then self.NotifyStack[#self.NotifyStack].Dismiss() end
 	task.delay(options.Duration or kind.Duration, entry.Dismiss)
 end
@@ -2304,7 +2217,6 @@ function Window:ApplyTheme(name, silent)
 	if not theme then return end
 	for key, value in theme do Current[key] = value end
 	self.ThemeName = name
-	-- Off-screen pages take the new colours immediately, so only what's visible animates.
 	local hidden = {}
 	for _, tab in self.Tabs do
 		if tab ~= self.CurrentTab then
@@ -2316,7 +2228,6 @@ function Window:ApplyTheme(name, silent)
 	if not silent then self:Notify(('Applied "%s" theme.'):format(name)) end
 end
 
--- Dragging a theme colour would otherwise repaint hundreds of instances per mouse movement.
 function Window:SetThemeColor(key, color)
 	Current[key] = color
 	self.PendingThemeKeys[key] = true
@@ -2414,13 +2325,11 @@ function Window:_modalPosition(offsetY)
 	return Offset(floor((self.Width - 420) / 2), floor((self.Height - 340) / 2) + offsetY)
 end
 
--- Sizes stay even so a centre anchor still lands on whole pixels.
 local function evenClamp(value, minimum, maximum)
 	local clamped = math.clamp(floor(value), minimum, math.max(minimum, maximum))
 	return clamped - clamped % 2
 end
 
--- The tab list and search box must both fit, however many tabs were added.
 function Window:_minHeight()
 	local needed = math.ceil(self.SidebarY + Metrics.TabH / 2 + Metrics.Gap + Metrics.SearchH + Metrics.Pad)
 	return evenClamp(math.max(self.MinSize.Y, needed + needed % 2), 0, math.huge)
@@ -2447,7 +2356,6 @@ function Window:_applySize(width, height)
 	if self.Search and not self.Search.Open then self.Search.Modal.Position = self:_modalPosition(0) end
 end
 
--- Resizes from code, keeping the window's top-left corner where it is.
 function Window:SetSize(width, height)
 	width = evenClamp(width, self.MinSize.X, math.huge)
 	height = evenClamp(height, self:_minHeight(), math.huge)
@@ -2518,7 +2426,7 @@ function Window:_makeDraggable(handle, target, allowed, layered)
 		end)
 	end)
 end
--- Input can reach the window background through anything above it, so check the pointer directly.
+
 function Window:_overControl(point)
 	if self.Search.Open then return true end
     if inside(self.Controls, point) then return true end
@@ -2668,7 +2576,6 @@ function Window:_buildPicker()
 	end
 	local svKnob = ringKnob(sv)
 	picker.SVKnob = svKnob
-	-- The knob's centre travels 6px inside each edge, matching the original.
 	local INSET = (Metrics.PickerKnob + 4) / 2 - 1
 	local function along(scale) return round(INSET - INSET * 2 * scale) end
 	local function fromPointer(position, origin, length)
@@ -2685,8 +2592,6 @@ function Window:_buildPicker()
 	local hueKnob = ringKnob(hue)
 
 	local alphaBar = new("Frame", { Bg = "Background", Position = Offset(pad + 1, alphaY + 1), Size = Offset(width - pad * 2 - 2, barW - 2), Radius = Metrics.Radius, Border = "Outline" }, body)
-	-- A CanvasGroup is the only container whose UICorner clips its children, so the square
-	-- checker cells stay inside the rounded ends.
 	local alphaClip = new("CanvasGroup", { Name = "AlphaClip", BackgroundTransparency = 0, BackgroundColor3 = Color3.new(1, 1, 1), Size = Dim2(1, 0, 1, 0), Radius = Metrics.Radius }, alphaBar)
 	for column = 0, 48 do
 		for row = 0, 2 do
@@ -2731,7 +2636,6 @@ function Window:_buildPicker()
 		if picker.Animation then picker.Animation:Set(target.Animation or "None", true) end
 	end
 
-	-- Each hit area overhangs its control so knobs resting on an edge can still be grabbed.
 	local function dragArea(area, knob, update)
 		local hit = new("TextButton", { Position = Offset(-6, -6), Size = Dim2(1, 12, 1, 12), ZIndex = 5 }, area)
 		hit.InputBegan:Connect(function(input)
@@ -2826,7 +2730,6 @@ function Window:_buildSearch()
 		return row
 	end
 
-	-- Rows are matched to results and reused, so a keystroke only touches what actually changed.
 	local function sync()
 		local text = box.Text
 		setText(self.SearchLabel, text ~= "" and text or "Search...")
@@ -3518,7 +3421,6 @@ function Window:_updateTooltip()
 	end
 end
 
--- Everything anchored to the screen is placed at whole pixels, the main defence against blurry text.
 function Window:_placeOverlays()
 	local size = self.Screen.AbsoluteSize
 	if size.X <= 0 then return end
@@ -3754,7 +3656,6 @@ function Blossom.new(options)
 	addShadow(root, "Large")
 	win.Root = root
 	win.Fader = newFader(holder)
-	-- A Modal button frees the cursor from first-person camera lock while the menu is open.
 	win.ModalButton = new("TextButton", { Modal = true, Size = Offset(1, 1) }, holder)
 
 	local sidebar = new("Frame", { Size = Dim2(0, Metrics.SidebarW, 1, 0) }, root)
