@@ -1066,9 +1066,34 @@ end
 local function attachKeybind(section, item, options)
 	local win = section.Window
 	local object = {
-		Key = options.Key, Mode = options.Mode or "Toggle", Listening = false,
+		Key = options.Key, Mode = options.Mode or "Toggle", Listening = false, Enabled = true,
 		OnPress = options.OnPress, OnRelease = options.OnRelease, Name = options.Name,
 	}
+	if TouchOnly and options.Gear then
+		local size = Metrics.ChipH
+		local holder = new("Frame", { Size = Offset(size, size) }, item.Frame)
+		local icon = makeIcon(holder, "gear", 14, function()
+			return object.Enabled and Current.Accent or Current.InactiveText
+		end, "Inline", { Position = Offset(1, 1) })
+		local hit = new("TextButton", { Position = Offset(-6, -6), Size = Offset(size + 12, size + 12), ZIndex = 2 }, holder)
+		addSlot(item, holder, size, size, Metrics.Gap + 2)
+		function object.Refresh()
+			icon.Update()
+			if object.OnKeyChanged then object.OnKeyChanged() end
+		end
+		function object:Set(key)
+			object.Key = key
+			object.Refresh()
+		end
+		function object:SetEnabled(value)
+			object.Enabled = value == true
+			object.Refresh()
+		end
+		hit.MouseButton1Click:Connect(function() object:SetEnabled(not object.Enabled) end)
+		object.Chip = holder
+		table.insert(win.Binds, object)
+		return object
+	end
 	local chip, text = makeChip(item.Frame, keyName(object.Key))
 	local button = new("TextButton", { Size = Dim2(1, 0, 1, 0), ZIndex = 2 }, chip)
 	local slot = addSlot(item, chip, 18, Metrics.ChipH, Metrics.Gap + 2)
@@ -1131,7 +1156,7 @@ local function addInlineControls(section, item, options, name)
 		color = attachColor(section, item, { Default = options.Color, Alpha = options.ColorAlpha, Callback = options.ColorCallback })
 	end
 	if options.Keybind ~= nil then
-		keybind = attachKeybind(section, item, { Key = options.Keybind, Mode = options.KeybindMode, Name = options.KeybindName or name })
+		keybind = attachKeybind(section, item, { Key = options.Keybind, Mode = options.KeybindMode, Name = options.KeybindName or name, Gear = options.GearOnTouch })
 	end
 	return keybind, color
 end
@@ -1207,6 +1232,7 @@ function Section:Toggle(options)
 
 	local hotkeyName = options.KeybindName or (name == "Enabled" and self.Name) or name
 	options.KeybindName = hotkeyName
+	options.GearOnTouch = true
 	toggle.Keybind, toggle.Color = addInlineControls(self, item, options, hotkeyName)
 	if toggle.Keybind then
 		toggle.Keybind.Owner = toggle
@@ -2136,7 +2162,7 @@ end
 
 function Window:SetHotkeyActive(object, active)
 	local entry = self.HotkeyEntries[object]
-	local shouldShow = TouchOnly or (active and object.Key ~= nil)
+	local shouldShow = object.Enabled ~= false and (TouchOnly or (active and object.Key ~= nil))
 	local extra = TouchOnly and 28 or 0
 	local function caption()
 		if TouchOnly then return object.Name or "Key" end
@@ -2924,7 +2950,7 @@ function Window:_serialize()
 		if object.Swatch then
 			value = { Color = object.Value:ToHex(), Alpha = object.Alpha }
 		elseif object.Chip then
-			value = { Key = object.Key and object.Key.Name or false, Mode = object.Mode }
+			value = { Key = object.Key and object.Key.Name or false, Mode = object.Mode, Enabled = object.Enabled ~= false }
 		elseif object.Multi then
 			local list = {}
 			for option, enabled in object.Value do
@@ -2951,6 +2977,7 @@ function Window:_deserialize(json)
 					key = string.find(value.Key, "MouseButton", 1, true) and Enum.UserInputType[value.Key] or Enum.KeyCode[value.Key]
 				end
 				object:Set(key)
+				if object.SetEnabled then object:SetEnabled(value.Enabled ~= false) end
 			else
 				object:Set(value)
 			end
@@ -3476,7 +3503,7 @@ function Blossom.new(options)
 		if processed then return end
 		if input.KeyCode == win.MenuKey then win:Toggle() end
 		for _, object in win.Binds do
-			if object.Key and (object.Key == input.KeyCode or object.Key == input.UserInputType) and object.OnPress then
+			if object.Key and object.Enabled ~= false and (object.Key == input.KeyCode or object.Key == input.UserInputType) and object.OnPress then
 				object.OnPress()
 			end
 		end
