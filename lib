@@ -3652,9 +3652,6 @@ function Blossom.new(options)
 		win:_buildLoader(options)
 		win:_placeOverlays()
 	end
-		win:_buildLoader(options)
-		win:_placeOverlays()
-	end
 
 	return win
 end
