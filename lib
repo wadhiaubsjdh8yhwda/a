@@ -1070,13 +1070,15 @@ local function attachKeybind(section, item, options)
 		OnPress = options.OnPress, OnRelease = options.OnRelease, Name = options.Name,
 	}
 	if TouchOnly and options.Gear then
-		local size = Metrics.ChipH
-		local holder = new("Frame", { Size = Offset(size, size) }, item.Frame)
-		local icon = makeIcon(holder, "gear", 14, function()
+		local chip, caption = makeChip(item.Frame, "")
+		caption.Visible = false
+		chip.Size = Offset(22, Metrics.ChipH - 2)
+		local icon = makeIcon(chip, "gear", 10, function()
 			return object.Enabled and Current.Accent or Current.InactiveText
-		end, "Inline", { Position = Offset(1, 1) })
-		local hit = new("TextButton", { Position = Offset(-6, -6), Size = Offset(size + 12, size + 12), ZIndex = 2 }, holder)
-		addSlot(item, holder, size, size, Metrics.Gap + 2)
+		end, "Element", { Position = Offset(6, 2) })
+		local hit = new("TextButton", { Position = Offset(-4, -4), Size = Offset(30, 22), ZIndex = 2 }, chip)
+		addSlot(item, chip, 24, Metrics.ChipH, Metrics.Gap + 2)
+		interactive(chip, "Element", nil, nil, hit)
 		function object.Refresh()
 			icon.Update()
 			if object.OnKeyChanged then object.OnKeyChanged() end
@@ -1089,8 +1091,8 @@ local function attachKeybind(section, item, options)
 			object.Enabled = value == true
 			object.Refresh()
 		end
-		hit.MouseButton1Click:Connect(function() object:SetEnabled(not object.Enabled) end)
-		object.Chip = holder
+		hit.MouseButton1Click:Connect(function() win:OpenKeybindMenu(chip, object) end)
+		object.Chip, object.Label = chip, caption
 		table.insert(win.Binds, object)
 		return object
 	end
@@ -2549,8 +2551,47 @@ function Window:_buildKeybindMenu()
 	local width = 202
 	local inner = width - pad * 2
 	local half = (inner - gap) / 2
-	local frame, body, controls = self:_popupFrame(width, pad * 2 + rowH * 2 + gap)
+	local height = TouchOnly and (pad * 2 + rowH) or (pad * 2 + rowH * 2 + gap)
+	local frame, body, controls = self:_popupFrame(width, height)
 	local menu = { Frame = frame, Fader = newFader(frame), Target = nil }
+
+	if TouchOnly then
+		local row = new("TextButton", {
+			Position = Offset(pad + 1, pad + 1), Size = Offset(inner - 2, rowH - 2), Radius = Metrics.Radius,
+			Border = "Outline", BackgroundTransparency = 0,
+		}, body)
+		interactive(row, "Element")
+		addGradient(row)
+		label(row, { Text = "Hotkey", X = 8, RowH = rowH - 2, Right = 44 })
+		local function isOn() return menu.Target ~= nil and menu.Target.Enabled ~= false end
+		local track = new("Frame", {
+			Bg = function() return isOn() and Current.Accent or Current.Element end,
+			Position = Offset(inner - 2 - 8 - (Metrics.ToggleW - 2), floor((rowH - 2 - (Metrics.ToggleH - 2)) / 2)),
+			Size = Offset(Metrics.ToggleW - 2, Metrics.ToggleH - 2), Radius = FULL, Border = "Outline",
+		}, row)
+		addGradient(track)
+		local knob = new("Frame", {
+			Bg = function() return isOn() and Current.Text or Current.InactiveText end,
+			Size = Offset(Metrics.ToggleKnob, Metrics.ToggleKnob), Radius = FULL,
+		}, track)
+		table.insert(controls, row)
+
+		function menu.Paint(animated)
+			if not menu.Target then return end
+			place(knob, "Position", Offset(isOn() and Metrics.ToggleW - 2 - Metrics.ToggleKnob - 2 or 2, 2), animated, "Knob")
+			local preset = animated and "Fast" or false
+			refresh(track, preset)
+			refresh(knob, preset)
+		end
+		row.MouseButton1Click:Connect(function()
+			if not menu.Target then return end
+			menu.Target:SetEnabled(not (menu.Target.Enabled ~= false))
+			menu.Paint(true)
+		end)
+		self.KeybindMenu = menu
+		return
+	end
+
 	local pill = new("Frame", { Bg = "Accent", Size = Offset(half - 2, rowH - 2), Position = Offset(pad + half + gap + 1, pad + 1), Radius = Metrics.Radius, Border = "Outline" }, body)
 	addGradient(pill)
 	local onToggle = new("TextButton", { Position = Offset(pad, pad), Size = Offset(half, rowH), ZIndex = 2 }, body)
