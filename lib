@@ -2990,7 +2990,36 @@ function Window:Close()
 end
 
 local ConfigMemory = {}
-local function configPath(name) return "Blossom/" .. name .. ".json" end
+local DEFAULT_FOLDER = "Blossom"
+
+local function cleanFolder(path)
+	path = string.gsub(tostring(path or DEFAULT_FOLDER), "\\", "/")
+	path = string.gsub(path, "[^%w%s_%-%./]", "_")
+	path = string.gsub(path, "^/+", "")
+	path = string.gsub(path, "/+$", "")
+	if path == "" then return DEFAULT_FOLDER end
+	return path
+end
+
+local function ensureFolder(path)
+	if typeof(isfolder) ~= "function" or typeof(makefolder) ~= "function" then return end
+	local built
+	for part in string.gmatch(path, "[^/]+") do
+		built = built and (built .. "/" .. part) or part
+		if not isfolder(built) then makefolder(built) end
+	end
+end
+
+local function configPath(folder, name) return folder .. "/" .. name .. ".json" end
+
+local function memoryFor(folder)
+	local store = ConfigMemory[folder]
+	if not store then
+		store = { Configs = {} }
+		ConfigMemory[folder] = store
+	end
+	return store
+end
 
 function Window:_serialize()
 	local data = {}
@@ -3045,13 +3074,14 @@ end
 
 function Window:ListConfigs()
 	local names = {}
-	if typeof(listfiles) == "function" and typeof(isfolder) == "function" and isfolder("Blossom") then
-		for _, path in listfiles("Blossom") do
+	local folder = self.ConfigFolder
+	if typeof(listfiles) == "function" and typeof(isfolder) == "function" and isfolder(folder) then
+		for _, path in listfiles(folder) do
 			local name = string.match(path, "([^/\\]+)%.json$")
 			if name then table.insert(names, name) end
 		end
 	else
-		for name in ConfigMemory do table.insert(names, name) end
+		for name in memoryFor(folder).Configs do table.insert(names, name) end
 	end
 	table.sort(names)
 	return names
@@ -3059,30 +3089,33 @@ end
 
 function Window:SaveConfig(name)
 	local json = self:_serialize()
+	local folder = self.ConfigFolder
 	if typeof(writefile) == "function" then
-		if typeof(isfolder) == "function" and not isfolder("Blossom") then makefolder("Blossom") end
-		writefile(configPath(name), json)
+		ensureFolder(folder)
+		writefile(configPath(folder, name), json)
 	else
-		ConfigMemory[name] = json
+		memoryFor(folder).Configs[name] = json
 	end
 end
 
 function Window:LoadConfig(name)
+	local folder = self.ConfigFolder
 	local json
-	if typeof(readfile) == "function" and typeof(isfile) == "function" and isfile(configPath(name)) then
-		json = readfile(configPath(name))
+	if typeof(readfile) == "function" and typeof(isfile) == "function" and isfile(configPath(folder, name)) then
+		json = readfile(configPath(folder, name))
 	else
-		json = ConfigMemory[name]
+		json = memoryFor(folder).Configs[name]
 	end
 	if json then self:_deserialize(json); return true end
 	return false
 end
 
 function Window:DeleteConfig(name)
-	if typeof(delfile) == "function" and typeof(isfile) == "function" and isfile(configPath(name)) then
-		delfile(configPath(name))
+	local folder = self.ConfigFolder
+	if typeof(delfile) == "function" and typeof(isfile) == "function" and isfile(configPath(folder, name)) then
+		delfile(configPath(folder, name))
 	end
-	ConfigMemory[name] = nil
+	memoryFor(folder).Configs[name] = nil
 end
 
 local B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -3130,17 +3163,17 @@ local function copyToClipboard(text)
 	return pcall(copy, text)
 end
 
-local function readConfig(name)
-	if typeof(readfile) == "function" and typeof(isfile) == "function" and isfile(configPath(name)) then
-		return readfile(configPath(name))
+local function readConfig(folder, name)
+	if typeof(readfile) == "function" and typeof(isfile) == "function" and isfile(configPath(folder, name)) then
+		return readfile(configPath(folder, name))
 	end
-	return ConfigMemory[name]
+	return memoryFor(folder).Configs[name]
 end
 
 function Window:ExportConfig(name)
 	local json
 	if name then
-		json = readConfig(name)
+		json = readConfig(self.ConfigFolder, name)
 		if not json then return nil end
 	else
 		json = self:_serialize()
@@ -3163,27 +3196,29 @@ end
 local AUTOLOAD_PATH = "Mystrix/autoload.txt"
 local AutoloadMemory
 
-local function readAutoload()
+local function readAutoload(folder)
+	local path = folder .. "/autoload.txt"
 	if typeof(readfile) == "function" and typeof(isfile) == "function" then
-		return isfile(AUTOLOAD_PATH) and readfile(AUTOLOAD_PATH) or nil
+		return isfile(path) and readfile(path) or nil
 	end
-	return AutoloadMemory
+	return memoryFor(folder).Autoload
 end
 
-local function writeAutoload(name)
+local function writeAutoload(folder, name)
+	local path = folder .. "/autoload.txt"
 	if typeof(writefile) ~= "function" then
-		AutoloadMemory = name
+		memoryFor(folder).Autoload = name
 	elseif name then
-		if typeof(isfolder) == "function" and not isfolder("Blossom") then makefolder("Blossom") end
-		writefile(AUTOLOAD_PATH, name)
-	elseif typeof(delfile) == "function" and isfile(AUTOLOAD_PATH) then
-		delfile(AUTOLOAD_PATH)
+		ensureFolder(folder)
+		writefile(path, name)
+	elseif typeof(delfile) == "function" and typeof(isfile) == "function" and isfile(path) then
+		delfile(path)
 	end
 end
 
 function Window:BuildSettings(tab)
 	local selected
-	local saved = readAutoload()
+	local saved = readAutoload(self.ConfigFolder)
 	local autoloadOn, autoloadName = saved ~= nil, saved
 	local autoloadList
     local profiles = tab:Section({ Name = "Profiles", Icon = "folder", Side = 1 })
@@ -3243,7 +3278,7 @@ function Window:BuildSettings(tab)
 		importBox:Set("", true)
 	end })
 
-	local function storeAutoload() writeAutoload(autoloadOn and autoloadName or nil) end
+	local function storeAutoload() writeAutoload(self.ConfigFolder, autoloadOn and autoloadName or nil) end
     local autoload = tab:Section({ Name = "Autoload", Icon = "zap", Side = 1 })
 	autoload:Toggle({ Name = "Load on start", Default = autoloadOn, NoSave = true, Callback = function(value)
 		autoloadOn = value
@@ -3490,8 +3525,8 @@ function Window:_applyFit()
 	end
 end
 
-local function loadFile(key)
-	return "Blossom/load_" .. (string.gsub(key, "[^%w_%-]", "_")) .. ".txt"
+local function loadFile(folder, key)
+	return folder .. "/load_" .. (string.gsub(key, "[^%w_%-]", "_")) .. ".txt"
 end
 
 function Window:_buildLoader(options)
@@ -3516,8 +3551,9 @@ function Window:_buildLoader(options)
 	local total = options.Total
 	if not total then
 		pcall(function()
-			if typeof(isfile) == "function" and typeof(readfile) == "function" and isfile(loadFile(key)) then
-				total = tonumber(readfile(loadFile(key)))
+			local path = loadFile(self.ConfigFolder, key)
+			if typeof(isfile) == "function" and typeof(readfile) == "function" and isfile(path) then
+				total = tonumber(readfile(path))
 			end
 		end)
 	end
@@ -3580,8 +3616,8 @@ function Window:FinishLoading()
 	if load.Count > 0 then
 		pcall(function()
 			if typeof(writefile) == "function" then
-				if typeof(isfolder) == "function" and not isfolder("Blossom") then makefolder("Blossom") end
-				writefile(loadFile(load.Key), tostring(load.Count))
+				ensureFolder(self.ConfigFolder)
+				writefile(loadFile(self.ConfigFolder, load.Key), tostring(load.Count))
 			end
 		end)
 	end
@@ -3632,7 +3668,7 @@ function Blossom.new(options)
 		Width = startW, Height = startH, MinSize = minSize, ColumnW = floor((startW - Metrics.SidebarW - 1 - Metrics.Pad * 3) / 2),
 		SidebarW = Metrics.SidebarW, SidebarOpenW = Metrics.SidebarW, SidebarAnim = Metrics.SidebarW, SidebarCollapsed = false,
 		ResizeJobs = {}, ResizeHandles = {},
-		Title = options.Title or "Blossom", Tabs = {}, Sections = {}, Columns = {}, Index = {}, Binds = {}, Colors = {}, Flags = {},
+		Title = options.Title or "Blossom",	ConfigFolder = cleanFolder(options.ConfigFolder), Tabs = {}, Sections = {}, Columns = {}, Index = {}, Binds = {}, Colors = {}, Flags = {},
 		ThemeRows = {}, HotkeyEntries = {}, HotkeyOrder = {}, NotifyStack = {}, Connections = {}, Jobs = {}, Moved = {}, PendingThemeKeys = {}, FlagOwners = {},Described = {},
 		ThemeClock = 0, SidebarY = Metrics.FirstCategory, SidebarItems = {}, IndicatorOn = false,
 		Visible = true, ThemeName = themeName, MenuKey = options.MenuKey or Enum.KeyCode.RightShift,
