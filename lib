@@ -747,14 +747,7 @@ local Icons = {
     ["status-error"] = { { "f", 0.5, 0.5, 15, 15, FULL }, { "h", 4.5, 7.2, 7, 1.6, FULL, 45 }, { "h", 4.5, 7.2, 7, 1.6, FULL, -45 } },
     ["status-warning"] = { { "f", 2.6, 2.6, 10.8, 10.8, 2, 45 }, { "h", 7.2, 4.4, 1.6, 4.6, FULL }, { "h", 7.2, 10, 1.6, 1.6, FULL } },
     ["status-info"] = { { "f", 0.5, 0.5, 15, 15, FULL }, { "h", 7.2, 4.2, 1.6, 1.6, FULL }, { "h", 7.2, 6.8, 1.6, 5, FULL } },
-	logo = {
-		{ "f", 0.6, 0.6, 14.8, 14.8, FULL },
-		{ "h", 3.5, 4.5, 1.8, 7, 0 },
-		{ "h", 10.7, 4.5, 1.8, 7, 0 },
-		{ "h", 3, 6.7, 6.4, 1.8, 0, 53.13 },
-		{ "h", 6.6, 6.7, 6.4, 1.8, 0, -53.13 },
-		{ "f", 2.5, 8.9, 11, 0.9, 0, -12 },
-	},
+	logo = { Glyph = { Text = "𝔪" } },
 }
 
 -- Lucide (https://lucide.dev) through latte-soft/lucide-roblox: GetAsset(name, size) -> { Url = "rbxassetid://..." }.
@@ -830,8 +823,17 @@ local function makeIcon(parent, name, size, color, hole, props)
 	props = props or {}
 	local root = new("Frame", { Name = "Icon", Size = Offset(size, size), Position = props.Position, AnchorPoint = props.AnchorPoint, ZIndex = props.ZIndex }, parent)
 	local icon = { Root = root, Parts = {} }
-	local image = type(name) == "string" and imageFor(name)
-	if image then
+	local glyph = type(name) == "string" and Icons[name] and Icons[name].Glyph
+	local image = not glyph and type(name) == "string" and imageFor(name)
+	if glyph then
+		local letter = new("TextLabel", {
+			Size = Dim2(1, 0, 1, 0), Text = glyph.Text, TextScaled = true, Fg = color,
+			TextXAlignment = Enum.TextXAlignment.Center, TextYAlignment = Enum.TextYAlignment.Center,
+		}, root)
+		Cased[letter] = nil
+		if glyph.Font then letter.Font = glyph.Font end
+		table.insert(icon.Parts, letter)
+	elseif image then
 		local picture = new("ImageLabel", { Size = Dim2(1, 0, 1, 0), Image = image.Image }, root)
 		if image.RectSize then
 			picture.ImageRectSize = image.RectSize
