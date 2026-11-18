@@ -1176,6 +1176,7 @@ local function register(section, object, options, item)
 	end
 	win.Flags[flag] = object
 	object.Flag = flag
+	object.Early = options.Early
 	return flag
 end
 
@@ -3006,24 +3007,33 @@ end
 
 function Window:_deserialize(json)
 	local data = HttpService:JSONDecode(json)
-	for flag, value in data do
-		local object = self.Flags[flag]
-		if object then
-			if object.Swatch then
-				object:Set(Color3.fromHex(value.Color), value.Alpha)
-			elseif object.Chip then
-				object.Mode = value.Mode or object.Mode
-				local key = nil
-				if value.Key then
-					key = string.find(value.Key, "MouseButton", 1, true) and Enum.UserInputType[value.Key] or Enum.KeyCode[value.Key]
-				end
-				object:Set(key)
-				if object.SetEnabled then object:SetEnabled(value.Enabled ~= false) end
-			else
-				object:Set(value)
+	local order = {}
+	for flag in data do
+		if self.Flags[flag] then table.insert(order, flag) end
+	end
+	table.sort(order, function(a, b)
+		local early = self.Flags[a].Early == true
+		if early ~= (self.Flags[b].Early == true) then return early end
+		return a < b
+	end)
+	self.Restoring = true
+	for _, flag in order do
+		local object, value = self.Flags[flag], data[flag]
+		if object.Swatch then
+			object:Set(Color3.fromHex(value.Color), value.Alpha)
+		elseif object.Chip then
+			object.Mode = value.Mode or object.Mode
+			local key = nil
+			if value.Key then
+				key = string.find(value.Key, "MouseButton", 1, true) and Enum.UserInputType[value.Key] or Enum.KeyCode[value.Key]
 			end
+			object:Set(key)
+			if object.SetEnabled then object:SetEnabled(value.Enabled ~= false) end
+		else
+			object:Set(value)
 		end
 	end
+	self.Restoring = false
 end
 
 function Window:ListConfigs()
@@ -3139,24 +3149,30 @@ function Window:BuildSettings(tab)
 		storeAutoload()
 	end })
 
-	local theming = tab:Section({ Name = "Theming", Icon = "palette", Side = 2 })
-	theming:Dropdown({ Name = "Theme", Options = ThemeOrder, Default = self.ThemeName, MaxRows = 11, NoSave = true, Callback = function(value) self:ApplyTheme(value) end })
-	theming:Dropdown({ Name = "Casing", Options = Casings, Default = "Normal", NoSave = true, Callback = function(value) self:SetCasing(value) end })
+		local theming = tab:Section({ Name = "Theming", Icon = "palette", Side = 2 })
+	theming:Dropdown({ Name = "Theme", Options = ThemeOrder, Default = self.ThemeName, MaxRows = 11, Early = true, Callback = function(value) self:ApplyTheme(value, self.Restoring) end })
+	theming:Dropdown({ Name = "Casing", Options = Casings, Default = Casing, Callback = function(value) self:SetCasing(value, self.Restoring) end })
 	theming:Divider()
 	for _, pair in ThemeKeys do
 		local key = pair[2]
-		local color = theming:Colorpicker({ Name = pair[1], Default = Current[key], NoSave = true, Callback = function(value) self:SetThemeColor(key, value) end })
+		local color = theming:Colorpicker({ Name = pair[1], Default = Current[key], Callback = function(value) self:SetThemeColor(key, value) end })
 		table.insert(self.ThemeRows, { Key = key, Color = color })
 	end
 
 	local menu = tab:Section({ Name = "Menu", Icon = "sliders-horizontal", Side = 2 })
-	local menuBind = menu:Keybind({ Name = "Menu Key", Default = self.MenuKey, NoSave = true })
+	local menuBind = menu:Keybind({ Name = "Menu Key", Default = self.MenuKey })
 	menuBind.OnKeyChanged = function() self.MenuKey = menuBind.Key end
-	menu:Toggle({ Name = "Watermark", Default = true, NoSave = true, Callback = function(value) self.Watermark.Visible = value end })
-	menu:Toggle({ Name = "Hotkey List", Default = true, NoSave = true, Callback = function(value) self.Hotkeys.Visible = value end })
-	menu:Dropdown({ Name = "Font", Options = FontOrder, Default = "Inter", NoSave = true, Callback = function(value) self:SetFont(value) end })
-	menu:Dropdown({ Name = "Text Weight", Options = WeightOrder, Default = BodyWeight.Name, NoSave = true, Callback = function(value) self:SetTextWeight(value) end })
-    menu:Dropdown({ Name = "Notifications", Options = NotifyPlacements, Default = self.NotifyPlacement, NoSave = true, Callback = function(value) self:SetNotifyPlacement(value) end })
+	menu:Toggle({ Name = "Watermark", Default = true, Callback = function(value)
+		self.ShowWatermark = value
+		if self.Revealed then self.Watermark.Visible = value end
+	end })
+	menu:Toggle({ Name = "Hotkey List", Default = true, Callback = function(value)
+		self.ShowHotkeys = value
+		if self.Revealed then self.Hotkeys.Visible = value end
+	end })
+	menu:Dropdown({ Name = "Font", Options = FontOrder, Default = "Inter", Callback = function(value) self:SetFont(value) end })
+	menu:Dropdown({ Name = "Text Weight", Options = WeightOrder, Default = BodyWeight.Name, Callback = function(value) self:SetTextWeight(value) end })
+	menu:Dropdown({ Name = "Notifications", Options = NotifyPlacements, Default = self.NotifyPlacement, Callback = function(value) self:SetNotifyPlacement(value, self.Restoring) end })
 
 	if saved then
 		task.defer(function()
@@ -3390,6 +3406,12 @@ function Window:FinishLoading()
 	})
 end
 
+function Window:_showOverlays()
+	self.Revealed = true
+	if self.ShowWatermark ~= false then newFader(self.Watermark):Show() end
+	if self.ShowHotkeys ~= false then newFader(self.Hotkeys):Show() end
+end
+
 function Window:_reveal()
 	local load = self.Load
 	if self.Closing or not self.Screen.Parent or load.Done then return end
@@ -3399,8 +3421,7 @@ function Window:_reveal()
 		load.Frame:Destroy()
 	end)
 	self:SetVisible(true)
-	newFader(self.Watermark):Show()
-	newFader(self.Hotkeys):Show()
+	self:_showOverlays()
 end
 
 local Blossom = { Themes = Themes, ThemeOrder = ThemeOrder, Metrics = Metrics, Fonts = Fonts, NotifyTypes = NotifyTypes }
@@ -3625,10 +3646,12 @@ function Blossom.new(options)
 		task.defer(function()
 			if win.Screen.Parent == nil then return end
 			win:SetVisible(true)
-			newFader(win.Watermark):Show()
-			newFader(win.Hotkeys):Show()
+			win:_showOverlays()
 		end)
 	else
+		win:_buildLoader(options)
+		win:_placeOverlays()
+	end
 		win:_buildLoader(options)
 		win:_placeOverlays()
 	end
