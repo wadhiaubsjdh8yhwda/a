@@ -370,6 +370,7 @@ local function new(class, props, parent)
 	end
 	if TEXT_CLASSES[class] then
 		if class ~= "TextButton" then Cased[inst] = {} end
+		if class == "TextBox" then inst.Text = "" end
 		inst.FontFace = fontOf(nil)
 		inst.TextSize = 13
 		inst.TextXAlignment = Enum.TextXAlignment.Left
@@ -2769,7 +2770,7 @@ function Window:_buildSearch()
 	local field = new("Frame", { Bg = "Inline", Position = Offset(pad * 2 + 1, 43), Size = Offset(width - pad * 4 - 2, 34), Radius = Metrics.PillRadius, Border = "Outline" }, modal)
 	makeIcon(field, "search", 14, "InactiveText", "Inline", { Position = Offset(10, 10) })
 	local box = new("TextBox", {
-		Fg = "Text", PlaceholderText = "Type to search...", Position = Offset(34, capOffset(34, 13)), Size = Dim2(1, -45, 0, 20), ClearTextOnFocus = false,
+		Fg = "Text", PlaceholderText = "Search...", Text = "", Position = Offset(34, capOffset(34, 13)), Size = Dim2(1, -45, 0, 20), ClearTextOnFocus = false,
 	}, field)
 	bind(box, "PlaceholderColor3", "InactiveText")
 	local results = new("ScrollingFrame", {
@@ -2941,8 +2942,7 @@ function Window:_applySidebar(width)
 	self.Divider.Position = Offset(width, 0)
 	self.Content.Position = Offset(width + 1, 0)
 	self.Content.Size = Dim2(1, -(width + 1), 1, 0)
-	self.SidebarGrip.Position = Offset(width - 3, 40)
-	self.CollapseButton.Position = Offset(width - 8, 16)
+	self.CollapseButton.Position = Offset(width - 9, 4)
 	self.Indicator.Size = Offset(tabW - 2, Metrics.TabH - 2)
 	self.SearchButton.Size = Offset(tabW - 2, Metrics.SearchH - 2)
 	self.SearchLabel.Visible = not compact
@@ -2967,10 +2967,9 @@ function Window:SetSidebarCollapsed(collapsed, animated)
 	if self.SidebarCollapsed == collapsed then return end
 	self.SidebarCollapsed = collapsed
 	self:CloseFloating()
-	self.SidebarGrip.Visible = not collapsed
 	place(self.CollapseIcon.Root, "Rotation", collapsed and -90 or 90, animated, "Smooth")
 	self:_layoutSidebar(animated)
-	local goal = collapsed and Metrics.SidebarShut or self.SidebarOpenW
+	local goal = collapsed and Metrics.SidebarShut or Metrics.SidebarW
 	if animated then
 		animate(self, "SidebarAnim", goal, "Smooth", {
 			Step = function(value)
@@ -2986,42 +2985,9 @@ end
 
 function Window:_buildSidebarControls()
 	local root = self.Root
-	local hovering, dragging = false, false
-	local divider = new("Frame", {
-		Bg = function() return (hovering or dragging) and Current.InactiveText or Current.Outline end,
-		Position = Offset(self.SidebarW, 0), Size = Dim2(0, 1, 1, 0),
-	}, root)
-	self.Divider = divider
-	local grip = new("TextButton", { Name = "SidebarGrip", Position = Offset(self.SidebarW - 3, 40), Size = Dim2(0, 7, 1, -70), ZIndex = 6 }, root)
-	self.SidebarGrip = grip
-	hoverable(grip, function()
-		hovering = true
-		refresh(divider)
-	end, function()
-		hovering = false
-		refresh(divider)
-	end)
-	grip.InputBegan:Connect(function(input)
-		if not isClick(input) or self.SidebarCollapsed or self.Search.Open then return end
-		self:CloseFloating()
-		local start, base = mousePos(), self.SidebarOpenW
-		dragging = true
-		refresh(divider)
-		beginDrag(function(point)
-			local limit = math.max(Metrics.SidebarMin, math.min(Metrics.SidebarMax, self.Width - 331))
-			local width = math.clamp(floor(base + (point.X - start.X) / self.Fit), Metrics.SidebarMin, limit)
-			if width == self.SidebarW then return end
-			self.SidebarOpenW = width
-			snap(self, "SidebarAnim", width)
-			self:_applySidebar(width)
-		end, function()
-			dragging = false
-			refresh(divider)
-		end)
-	end)
-
+	self.Divider = new("Frame", { Bg = "Outline", Position = Offset(self.SidebarW, 0), Size = Dim2(0, 1, 1, 0) }, root)
 	local button = new("TextButton", {
-		Name = "SidebarToggle", Position = Offset(self.SidebarW - 8, 16), Size = Offset(18, 18), Radius = FULL,
+		Name = "SidebarToggle", Position = Offset(self.SidebarW - 9, 4), Size = Offset(18, 18), Radius = FULL,
 		Border = "Outline", BackgroundTransparency = 0, ZIndex = 7,
 	}, root)
 	interactive(button, "Background", "Inline", "Element")
@@ -3032,7 +2998,6 @@ function Window:_buildSidebarControls()
 		if self.Search.Open then return end
 		self:SetSidebarCollapsed(not self.SidebarCollapsed, true)
 	end)
-	table.insert(self.ResizeHandles, grip)
 	table.insert(self.ResizeHandles, button)
 end
 
@@ -3624,15 +3589,6 @@ function Blossom.new(options)
 
 	local content = new("Frame", { Bg = "Tab", Position = Offset(Metrics.SidebarW + 1, 0), Size = Dim2(1, -(Metrics.SidebarW + 1), 1, 0), Radius = Metrics.WindowRadius }, root)
 	win.Content = content
-	new("Frame", { Name = "CornerPatch", Bg = "Tab", Size = Dim2(0, 12, 1, 0) }, content)
-	interactive(searchButton, "Inline")
-	win.SearchButton = searchButton
-	makeIcon(searchButton, "search", 14, "InactiveText", "Inline", { Position = Offset(6, 6) })
-	win.SearchLabel = label(searchButton, { Fg = "InactiveText", Text = "Search...", X = 30, RowH = Metrics.SearchH - 2, Right = 6 })
-	searchButton.MouseButton1Click:Connect(function() win:OpenSearch() end)
-
-	new("Frame", { Bg = "Outline", Position = Offset(Metrics.SidebarW, 0), Size = Dim2(0, 1, 1, 0) }, root)
-	local content = new("Frame", { Bg = "Tab", Position = Offset(Metrics.ContentX, 0), Size = Dim2(1, -Metrics.ContentX, 1, 0), Radius = Metrics.WindowRadius }, root)
 	new("Frame", { Name = "CornerPatch", Bg = "Tab", Size = Dim2(0, 12, 1, 0) }, content)
 	win.Pages = new("Frame", {
 		Name = "Pages", Position = Offset(0, Metrics.TopBar), Size = Dim2(1, 0, 1, -(Metrics.TopBar + Metrics.Pad)), ClipsDescendants = true,
