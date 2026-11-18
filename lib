@@ -24,6 +24,7 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
+local GuiService = game:GetService("GuiService")
 
 local INTER = "rbxassetid://12187365364"
 local Vec2, Dim2 = Vector2.new, UDim2.new
@@ -121,7 +122,7 @@ local Fonts = {
 local FontOrder = { "Inter", "Builder Sans", "Roboto", "Montserrat", "Source Sans Pro", "Ubuntu", "Nunito", "Arimo" }
 local WeightOrder = { "Regular", "Medium", "SemiBold", "Bold" }
 
-local Current = table.clone(Themes.Blossom)
+local Current = table.clone(Themes["Sakura Drift"])
 local Casing = "Normal"
 local FontFamily = INTER
 local BodyWeight = Enum.FontWeight.SemiBold
@@ -483,7 +484,18 @@ end
 
 local function clamp01(n) return math.clamp(n, 0, 1) end
 
+local TouchPoint
+
+local function trackTouch(input)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		TouchPoint = Vec2(input.Position.X, input.Position.Y) + GuiService:GetGuiInset()
+	elseif input.UserInputType == Enum.UserInputType.MouseMovement then
+		TouchPoint = nil
+	end
+end
+
 local function isClick(input)
+	trackTouch(input)
 	return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
 end
 
@@ -495,7 +507,7 @@ local LayerScale = 1
 local TouchOnly = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
 
 local function mousePos()
-	local location = UserInputService:GetMouseLocation()
+	local location = TouchPoint or UserInputService:GetMouseLocation()
 	if ScreenRef then return location + ScreenRef.AbsolutePosition end
 	return location
 end
@@ -1197,6 +1209,7 @@ function Section:Toggle(options)
 	options.KeybindName = hotkeyName
 	toggle.Keybind, toggle.Color = addInlineControls(self, item, options, hotkeyName)
 	if toggle.Keybind then
+		toggle.Keybind.Owner = toggle
 		toggle.Keybind.OnPress = function()
 			if toggle.Keybind.Mode == "Hold" then toggle:Set(true) else toggle:Set(not toggle.Value) end
 		end
@@ -1780,7 +1793,7 @@ function Section:Listbox(options)
 	return listbox
 end
 
-function Section:_beginDrag()
+function Section:_beginDrag(immediate)
 	if self.Dropping then return end
 	local win, start = self.Window, mousePos()
 	local grab = start - self.Root.AbsolutePosition
@@ -1859,6 +1872,8 @@ function Section:_beginDrag()
 		animate(ghost, "Position", Offset(slot.X, slot.Y), "Smooth")
 	end
 
+	if immediate then lift() end
+
 	beginDrag(move, function()
 		if not lifted then return end
 		local column = self.Column
@@ -1917,8 +1932,21 @@ function Tab:Section(options)
 	table.insert(column.Sections, section)
 	table.insert(win.Sections, section)
 	hoverable(header, function() hovering = true; icon.Update(); chevron.Update(); refresh(title) end, function() hovering = false; icon.Update(); chevron.Update(); refresh(title) end)
-	header.MouseButton1Down:Connect(function()
-		if not TouchOnly then section:_beginDrag() end
+	header.InputBegan:Connect(function(input)
+		trackTouch(input)
+		local kind = input.UserInputType
+		if kind == Enum.UserInputType.MouseButton1 then
+			section:_beginDrag()
+		elseif kind == Enum.UserInputType.Touch then
+			local origin = input.Position
+			task.delay(0.35, function()
+				local state = input.UserInputState
+				if state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then return end
+				if (input.Position - origin).Magnitude > 10 then return end
+				if section.Dragging or section.Dropping then return end
+				section:_beginDrag(true)
+			end)
+		end
 	end)
 	fold.MouseButton1Click:Connect(function() section:SetCollapsed(not section.Collapsed, true) end)
 	section:Layout(false)
@@ -2108,7 +2136,12 @@ end
 
 function Window:SetHotkeyActive(object, active)
 	local entry = self.HotkeyEntries[object]
-	local shouldShow = active and object.Key ~= nil
+	local shouldShow = TouchOnly or (active and object.Key ~= nil)
+	local extra = TouchOnly and 28 or 0
+	local function caption()
+		if TouchOnly then return object.Name or "Key" end
+		return (object.Name or "Key") .. " - " .. keyName(object.Key)
+	end
 	if shouldShow and not entry then
 		local frame = new("Frame", { Bg = "Background", Size = Offset(40, 24), Radius = Metrics.FloatRadius, Border = "Outline", Visible = false }, self.Hotkeys)
 		new("Frame", { Bg = "Accent", Position = Offset(1, 5), Size = Offset(2, 14), Radius = Metrics.SmallRadius }, frame)
@@ -2116,15 +2149,37 @@ function Window:SetHotkeyActive(object, active)
 		entry = { Frame = frame, Label = text, Fader = newFader(frame) }
 		self.HotkeyEntries[object] = entry
 		table.insert(self.HotkeyOrder, object)
-		text:GetPropertyChangedSignal("TextBounds"):Connect(function()
-			frame.Size = Offset(math.ceil(text.TextBounds.X) + Metrics.Pad * 2, 24)
-		end)
-		setText(text, (object.Name or "Key") .. " - " .. keyName(object.Key))
-		frame.Size = Offset(math.ceil(text.TextBounds.X) + Metrics.Pad * 2, 24)
+		local function fit()
+			frame.Size = Offset(math.ceil(text.TextBounds.X) + Metrics.Pad * 2 + extra, 24)
+		end
+		text:GetPropertyChangedSignal("TextBounds"):Connect(fit)
+		setText(text, caption())
+		fit()
+		local owner = object.Owner
+		if TouchOnly and owner then
+			local track = new("Frame", {
+				Bg = function() return owner.Value and Current.Accent or Current.Element end,
+				AnchorPoint = Vec2(1, 0), Position = Dim2(1, -9, 0, 7), Size = Offset(20, 10), Radius = FULL, Border = "Outline",
+			}, frame)
+			local knob = new("Frame", {
+				Bg = function() return owner.Value and Current.Text or Current.InactiveText end,
+				Position = Offset(2, 2), Size = Offset(6, 6), Radius = FULL,
+			}, track)
+			local hit = new("TextButton", { Size = Dim2(1, 0, 1, 0), ZIndex = 2 }, frame)
+			function entry.Render(animated)
+				place(knob, "Position", Offset(owner.Value and 12 or 2, 2), animated, "Knob")
+				local preset = animated and "Fast" or false
+				refresh(track, preset)
+				refresh(knob, preset)
+			end
+			hit.MouseButton1Click:Connect(function() owner:Set(not owner.Value) end)
+			entry.Render(false)
+		end
 		frame.Position = Offset(-14, 33 * #self.HotkeyOrder + 1)
 		entry.Fader:Show()
 	elseif entry and shouldShow then
-		setText(entry.Label, (object.Name or "Key") .. " - " .. keyName(object.Key))
+		setText(entry.Label, caption())
+		if entry.Render then entry.Render(true) end
 		return
 	elseif entry then
 		self.HotkeyEntries[object] = nil
@@ -2353,26 +2408,31 @@ end
 function Window:SetSize(width, height)
 	width = evenClamp(width, self.MinSize.X, math.huge)
 	height = evenClamp(height, self:_minHeight(), math.huge)
-	local position = self.Holder.Position
-	snap(self.Holder, "Position", Offset(position.X.Offset + (width - self.Width) / 2, position.Y.Offset + (height - self.Height) / 2))
+	local position, scale = self.Holder.Position, self.Fit
+	snap(self.Holder, "Position", Offset(round(position.X.Offset + (width - self.Width) * scale / 2), round(position.Y.Offset + (height - self.Height) * scale / 2)))
 	self.Moved[self.Holder] = true
 	self:_applySize(width, height)
+	self:_applyFit()
 end
 
 function Window:_beginResize(axisX, axisY, onEnd)
-	if self.Search.Open or LayerScale < 1 then return end
+	if self.Search.Open then
+		if onEnd then onEnd() end
+		return
+	end
 	self:CloseFloating()
+	local scale = self.Fit
 	local start, startW, startH = mousePos(), self.Width, self.Height
 	local minHeight = self:_minHeight()
 	local position = self.Holder.Position
-	local left, top = position.X.Offset - startW / 2, position.Y.Offset - startH / 2
+	local left, top = position.X.Offset - startW * scale / 2, position.Y.Offset - startH * scale / 2
 	beginDrag(function(point)
-		local delta, screen = point - start, self.Screen.AbsoluteSize
-		local width = axisX == 1 and evenClamp(startW + delta.X, self.MinSize.X, screen.X - left - 4) or startW
-		local height = axisY == 1 and evenClamp(startH + delta.Y, minHeight, screen.Y - top - 4) or startH
+		local delta, screen = (point - start) / scale, self.Screen.AbsoluteSize
+		local width = axisX == 1 and evenClamp(startW + delta.X, self.MinSize.X, (screen.X - left - 4) / scale) or startW
+		local height = axisY == 1 and evenClamp(startH + delta.Y, minHeight, (screen.Y - top - 4) / scale) or startH
 		if width == self.Width and height == self.Height then return end
 		self.Moved[self.Holder] = true
-		snap(self.Holder, "Position", Offset(left + width / 2, top + height / 2))
+		snap(self.Holder, "Position", Offset(round(left + width * scale / 2), round(top + height * scale / 2)))
 		self:_applySize(width, height)
 	end, onEnd)
 end
@@ -2380,11 +2440,13 @@ end
 function Window:_buildResize()
 	local hovering, resizing = 0, false
 	local color = function() return (hovering > 0 or resizing) and Current.InactiveText or Current.Outline end
-	local grip = makeIcon(self.Root, "grip", 12, color, "Tab", { AnchorPoint = Vec2(1, 1), Position = Dim2(1, -2, 1, -2), ZIndex = 15 })
+	local grip = makeIcon(self.Root, "grip", TouchOnly and 16 or 12, color, "Tab", { AnchorPoint = Vec2(1, 1), Position = Dim2(1, -2, 1, -2), ZIndex = 15 })
+	local edge, corner = TouchOnly and 16 or 6, TouchOnly and 32 or 18
 	local function handle(name, position, size, anchor, axisX, axisY)
 		local button = new("TextButton", { Name = name, AnchorPoint = anchor, Position = position, Size = size, ZIndex = 16 }, self.Root)
 		hoverable(button, function() hovering += 1; grip.Update() end, function() hovering -= 1; grip.Update() end)
-		button.MouseButton1Down:Connect(function()
+		button.InputBegan:Connect(function(input)
+			if not isClick(input) then return end
 			resizing = true
 			grip.Update()
 			self:_beginResize(axisX, axisY, function()
@@ -2394,9 +2456,9 @@ function Window:_buildResize()
 		end)
 		table.insert(self.ResizeHandles, button)
 	end
-	handle("ResizeRight", Dim2(1, 3, 0, 12), Dim2(0, 6, 1, -30), Vec2(1, 0), 1, 0)
-	handle("ResizeBottom", Dim2(0, 12, 1, 3), Dim2(1, -30, 0, 6), Vec2(0, 1), 0, 1)
-	handle("ResizeCorner", Dim2(1, 3, 1, 3), Offset(18, 18), Vec2(1, 1), 1, 1)
+	handle("ResizeRight", Dim2(1, 3, 0, 12), Dim2(0, edge, 1, -(corner + 12)), Vec2(1, 0), 1, 0)
+	handle("ResizeBottom", Dim2(0, 12, 1, 3), Dim2(1, -(corner + 12), 0, edge), Vec2(0, 1), 0, 1)
+	handle("ResizeCorner", Dim2(1, 3, 1, 3), Offset(corner, corner), Vec2(1, 1), 1, 1)
 end
 
 function Window:_makeDraggable(handle, target, allowed, layered)
@@ -3282,9 +3344,8 @@ function Blossom.new(options)
 	local globalEnv = typeof(getgenv) == "function" and getgenv() or nil
 	local previous = LastWindow or (globalEnv and globalEnv.__BlossomWindow)
 	if previous then pcall(previous.Destroy, previous) end
-	if options.Theme and Themes[options.Theme] then
-		for key, value in Themes[options.Theme] do Current[key] = value end
-	end
+	local themeName = Themes[options.Theme] and options.Theme or "Sakura Drift"
+	for key, value in Themes[themeName] do Current[key] = value end
 	if options.Font then FontFamily = Fonts[options.Font] or options.Font end
 	if options.Lucide ~= nil then setLucide(options.Lucide) end
 	local minSize = options.MinSize or Vec2(Metrics.MinWindowW, Metrics.MinWindowH)
@@ -3297,7 +3358,7 @@ function Blossom.new(options)
 		Title = options.Title or "Blossom", Tabs = {}, Sections = {}, Columns = {}, Index = {}, Binds = {}, Colors = {}, Flags = {},
 		ThemeRows = {}, HotkeyEntries = {}, HotkeyOrder = {}, NotifyStack = {}, Connections = {}, Jobs = {}, Moved = {}, PendingThemeKeys = {}, FlagOwners = {},
 		ThemeClock = 0, SidebarY = Metrics.FirstCategory, SidebarItems = {}, IndicatorOn = false,
-		Visible = true, ThemeName = options.Theme or "Blossom", MenuKey = options.MenuKey or Enum.KeyCode.RightShift,
+		Visible = true, ThemeName = themeName, MenuKey = options.MenuKey or Enum.KeyCode.RightShift,
 		LastPopupTime = 0, DropdownClosedAt = 0,
 	}, Window)
 	ensureLoop()
@@ -3364,7 +3425,7 @@ function Blossom.new(options)
 	win:_buildKeybindMenu()
 	win:_buildPicker()
 	win:_buildSearch()
-	if options.Resizable ~= false and not TouchOnly then win:_buildResize() end
+	if options.Resizable ~= false then win:_buildResize() end
 	win:_buildFloatButton()
 	win:_applyFit()
 	win:_placeOverlays()
@@ -3374,7 +3435,7 @@ function Blossom.new(options)
 		win:_applyFit()
 		win:_placeOverlays()
 	end))
-
+	table.insert(win.Connections, UserInputService.InputChanged:Connect(trackTouch))
 	win:_makeDraggable(root, holder, function(point) return not win:_overControl(point) end)
 
 	table.insert(win.Connections, UserInputService.InputBegan:Connect(function(input, processed)
