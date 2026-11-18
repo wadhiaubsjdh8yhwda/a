@@ -490,6 +490,9 @@ end
 -- AbsolutePosition and GetMouseLocation use different origins whenever a top bar inset exists.
 -- Offsetting by the ScreenGui's own AbsolutePosition puts the pointer in AbsolutePosition space.
 local ScreenRef
+local Focus
+local LayerScale = 1
+local TouchOnly = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
 
 local function mousePos()
 	local location = UserInputService:GetMouseLocation()
@@ -498,7 +501,8 @@ local function mousePos()
 end
 
 local function toLayer(point)
-	return ScreenRef and point - ScreenRef.AbsolutePosition or point
+	if ScreenRef then point = point - ScreenRef.AbsolutePosition end
+	return point / LayerScale
 end
 
 local function inside(frame, point, margin)
@@ -508,6 +512,15 @@ local function inside(frame, point, margin)
 end
 
 -- Polls once per rendered frame, so dragging costs one update per frame however fast the mouse reports.
+local function lockScrolling(locked)
+	if not TouchOnly or not Focus then return end
+	for _, tab in Focus.Tabs do
+		for _, column in tab.Columns do
+			column.Scroll.ScrollingEnabled = not locked
+		end
+	end
+end
+
 local function beginDrag(onMove, onEnd, onFrame)
 	local last
 	local function job(dt)
@@ -519,11 +532,13 @@ local function beginDrag(onMove, onEnd, onFrame)
 		if onFrame then onFrame(point, dt) end
 	end
 	Jobs[job] = true
+	lockScrolling(true)
 	local ended
 	ended = UserInputService.InputEnded:Connect(function(input)
 		if isClick(input) then
 			ended:Disconnect()
 			Jobs[job] = nil
+			lockScrolling(false)
 			local point = mousePos()
 			if onMove and point ~= last then onMove(point) end
 			if onEnd then onEnd(point) end
@@ -533,7 +548,6 @@ end
 
 -- Roblox skips MouseLeave on fast movement and fires MouseEnter for covered objects, so hover
 -- is confirmed against the pointer every frame instead of trusting those events alone.
-local Focus
 local HoverSet = {}
 
 local function isShown(inst)
@@ -750,7 +764,10 @@ end
 
 local function lucideProvider()
 	if LucideResolved then return LucideProvider end
+	local win = Focus
+	if win then win:_busy(1, "Downloading icons") end
 	local ok, result = pcall(function() return loadstring(game:HttpGet(LUCIDE_URL))() end)
+	if win then win:_busy(-1) end
 	setLucide(ok and result or nil)
 	if not LucideProvider then warn("[Blossom] Lucide icons unavailable: " .. tostring(result)) end
 	return LucideProvider
@@ -1007,6 +1024,7 @@ function Section:SetCollapsed(collapsed, animated)
 end
 
 function Section:_item(height, kind, name, indexed)
+	self.Window:_tick(kind, name)
 	local frame = new("Frame", { Size = Dim2(1, 0, 0, height) }, self.Body)
 	local item = { Frame = frame, Height = height, Kind = kind, Name = name, Section = self, Slots = {}, Visible = true, Y = 0 }
 	table.insert(self.Items, item)
@@ -1260,7 +1278,7 @@ local function placeKnob(knob, pixels, animated)
 end
 
 local function alphaAt(track, point)
-	local inset = Metrics.TrackInset
+	local inset = Metrics.TrackInset * LayerScale
 	return clamp01((point.X - track.AbsolutePosition.X - inset) / (track.AbsoluteSize.X - inset * 2))
 end
 
@@ -1574,9 +1592,11 @@ local function buildDropdown(win, parent, options)
 
 	local function follow()
 		local p, s = input.AbsolutePosition, input.AbsoluteSize
-		local screen = win.Screen.AbsolutePosition.Y + win.Screen.AbsoluteSize.Y
-		flipped = p.Y + s.Y + 6 + panelH > screen - 8 and p.Y - 6 - panelH > win.Screen.AbsolutePosition.Y + 8
-		local goal = toLayer(Vec2(p.X, flipped and p.Y - 6 or p.Y + s.Y + 6))
+		local top = win.Screen.AbsolutePosition.Y
+		local bottom = top + win.Screen.AbsoluteSize.Y
+		local height, gap = panelH * LayerScale, 6 * LayerScale
+		flipped = p.Y + s.Y + gap + height > bottom - 8 and p.Y - gap - height > top + 8
+		local goal = toLayer(Vec2(p.X, flipped and p.Y - gap or p.Y + s.Y + gap))
 		panel.AnchorPoint = flipped and Vec2(0, 1) or Vec2(0, 0)
 		panel.Position = Offset(goal.X, goal.Y)
 	end
@@ -1587,7 +1607,7 @@ local function buildDropdown(win, parent, options)
 		if open == dropdown.Open then return end
 		dropdown.Open = open
 		refresh(stroke)
-		local width = input.AbsoluteSize.X
+		local width = input.AbsoluteSize.X / LayerScale
 		if open then
 			if win.OpenDropdown and win.OpenDropdown ~= dropdown then win.OpenDropdown:Toggle(false) end
 			win.OpenDropdown = dropdown
@@ -1640,7 +1660,7 @@ local function buildDropdown(win, parent, options)
 		rebuild()
 		if dropdown.Open then
 			measure()
-			panel.Size = Offset(input.AbsoluteSize.X, panelH)
+			panel.Size = Offset(input.AbsoluteSize.X / LayerScale, panelH)
 		end
 	end
 
@@ -1768,7 +1788,7 @@ function Section:_beginDrag()
 	local lifted, ghost, ghostFader = false, nil, nil
 
 	local function slotPosition(column)
-		return column.Scroll.AbsolutePosition + Vec2(0, self.Y - column.Scroll.CanvasPosition.Y)
+		return column.Scroll.AbsolutePosition + Vec2(0, (self.Y - column.Scroll.CanvasPosition.Y) * LayerScale)
 	end
 
 	local function targetFor(point)
@@ -1780,9 +1800,8 @@ function Section:_beginDrag()
 		local index = 1
 		for position, other in column.Sections do
 			if other ~= self then
-				local middle = column.Scroll.AbsolutePosition.Y - column.Scroll.CanvasPosition.Y + other.Y + other.TotalH / 2
-				-- A dead zone either side of each midpoint stops sections trading places repeatedly.
-				local bias = (current and position < current) and -14 or 14
+				local middle = column.Scroll.AbsolutePosition.Y + (other.Y + other.TotalH / 2 - column.Scroll.CanvasPosition.Y) * LayerScale
+				local bias = ((current and position < current) and -14 or 14) * LayerScale
 				if point.Y > middle + bias then index += 1 end
 			end
 		end
@@ -1793,15 +1812,14 @@ function Section:_beginDrag()
 		lifted = true
 		self.Dragging = true
 		win:CloseFloating()
-		local absolute, size = self.Root.AbsolutePosition, self.Root.AbsoluteSize
-		local layer = toLayer(absolute)
+		local layer = toLayer(self.Root.AbsolutePosition)
 		self.Root.Parent = win.DragLayer
-		self.Root.Size = Offset(size.X, self.TotalH)
+		self.Root.Size = Offset(win.ColumnW, self.TotalH)
 		self.Root.Position = Offset(layer.X, layer.Y)
 		refresh(stroke)
 		ghost = new("Frame", {
 			Bg = "Accent", BackgroundTransparency = 0.92, Radius = Metrics.CardRadius, Border = "Accent",
-			Position = Offset(layer.X, layer.Y), Size = Offset(size.X, self.TotalH), ZIndex = -1,
+			Position = Offset(layer.X, layer.Y), Size = Offset(win.ColumnW, self.TotalH), ZIndex = -1,
 		}, win.DragLayer)
 		ghostFader = newFader(ghost)
 		ghost.Visible = false
@@ -1867,6 +1885,7 @@ end
 -------------------------------------------------------------------------------
 
 function Tab:Section(options)
+	self.Window:_tick("Section", options.Name)
 	local win = self.Window
 	local column = self.Columns[options.Side or 1]
 	local headerH = options.Description and Metrics.HeaderDescH or Metrics.HeaderH
@@ -1898,7 +1917,9 @@ function Tab:Section(options)
 	table.insert(column.Sections, section)
 	table.insert(win.Sections, section)
 	hoverable(header, function() hovering = true; icon.Update(); chevron.Update(); refresh(title) end, function() hovering = false; icon.Update(); chevron.Update(); refresh(title) end)
-	header.MouseButton1Down:Connect(function() section:_beginDrag() end)
+	header.MouseButton1Down:Connect(function()
+		if not TouchOnly then section:_beginDrag() end
+	end)
 	fold.MouseButton1Click:Connect(function() section:SetCollapsed(not section.Collapsed, true) end)
 	section:Layout(false)
 	if options.Collapsed then section:SetCollapsed(true, false) end
@@ -1982,6 +2003,7 @@ function Window:_syncIndicator(animated)
 end
 
 function Window:Category(name)
+	self:_tick("Category", name)
 	local window = self
 	local root = new("TextButton", { Size = Offset(Metrics.SidebarW, 16) }, self.Sidebar)
 	local hovering = false
@@ -2014,6 +2036,7 @@ function Window:Category(name)
 end
 
 function Window:Tab(options)
+	self:_tick("Tab", options.Name)
 	local tab = setmetatable({
 		Window = self, Name = options.Name, Kind = "Tab", Y = 0, Hidden = false, Category = self.CurrentCategory,
 	}, Tab)
@@ -2251,7 +2274,7 @@ function Window:_openPopup(popup, anchor, absolute)
 	if self.LastPopupAnchor == anchor and os.clock() - self.LastPopupTime < 0.2 then return false end
 	self:ClosePopup()
 	local point = toLayer(absolute)
-	local viewport, size = self.Screen.AbsoluteSize, popup.Frame.Size
+	local viewport, size = self.Screen.AbsoluteSize / LayerScale, popup.Frame.Size
 	local x = math.clamp(floor(point.X), 8, math.max(8, viewport.X - size.X.Offset - 8))
 	local y = math.clamp(floor(point.Y), 8, math.max(8, viewport.Y - size.Y.Offset - 8))
 	popup.Anchor = anchor
@@ -2279,12 +2302,14 @@ function Window:OpenPicker(swatch, color)
 	self:_openPopup(picker, swatch, Vec2(p.X - 8, p.Y + s.Y + Metrics.Pad))
 end
 
-function Window:_clamped(target, x, y)
+function Window:_clamped(target, x, y, unit)
+	unit = unit or 1
 	local screen, size, anchor = self.Screen.AbsoluteSize, target.AbsoluteSize, target.AnchorPoint
 	local keep = math.min(60, size.X)
-	local left = math.clamp(x - anchor.X * size.X, keep - size.X, math.max(keep - size.X, screen.X - keep))
-	local top = math.clamp(y - anchor.Y * size.Y, 0, math.max(0, screen.Y - 30))
-	return Offset(round(left + anchor.X * size.X), round(top + anchor.Y * size.Y))
+	local px, py = x * unit, y * unit
+	local left = math.clamp(px - anchor.X * size.X, keep - size.X, math.max(keep - size.X, screen.X - keep))
+	local top = math.clamp(py - anchor.Y * size.Y, 0, math.max(0, screen.Y - 30))
+	return Offset(round((left + anchor.X * size.X) / unit), round((top + anchor.Y * size.Y) / unit))
 end
 
 function Window:_modalPosition(offsetY)
@@ -2335,7 +2360,7 @@ function Window:SetSize(width, height)
 end
 
 function Window:_beginResize(axisX, axisY, onEnd)
-	if self.Search.Open then return end
+	if self.Search.Open or LayerScale < 1 then return end
 	self:CloseFloating()
 	local start, startW, startH = mousePos(), self.Width, self.Height
 	local minHeight = self:_minHeight()
@@ -2374,20 +2399,20 @@ function Window:_buildResize()
 	handle("ResizeCorner", Dim2(1, 3, 1, 3), Offset(18, 18), Vec2(1, 1), 1, 1)
 end
 
-function Window:_makeDraggable(handle, target, allowed)
+function Window:_makeDraggable(handle, target, allowed, layered)
 	handle.InputBegan:Connect(function(input)
 		if not isClick(input) then return end
 		local start, origin = mousePos(), target.Position
 		if allowed and not allowed(start) then return end
 		beginDrag(function(point)
+			local unit = layered and LayerScale or 1
 			local delta = point - start
 			if delta.Magnitude < 1 and not self.Moved[target] then return end
 			self.Moved[target] = true
-			animate(target, "Position", self:_clamped(target, origin.X.Offset + delta.X, origin.Y.Offset + delta.Y), "Follow")
+			animate(target, "Position", self:_clamped(target, origin.X.Offset + delta.X / unit, origin.Y.Offset + delta.Y / unit, unit), "Follow")
 		end)
 	end)
 end
-
 -- Input can reach the window background through anything above it, so check the pointer directly.
 function Window:_overControl(point)
 	if self.Search.Open then return true end
@@ -2419,7 +2444,6 @@ end
 
 function Window:_popupFrame(width, height)
 	local wrapper = new("Frame", { Size = Offset(width, height), Visible = false, Active = true }, self.Popups)
-	-- A button, so nothing beneath the popup can take the click.
 	local body = new("TextButton", { Bg = "Background", Size = Dim2(1, 0, 1, 0), Radius = Metrics.PopupRadius, Border = "Outline" }, wrapper)
 	addShadow(body, "Large")
 	local controls = {}
@@ -2428,7 +2452,7 @@ function Window:_popupFrame(width, height)
 			if inside(control, point, 6) then return false end
 		end
 		return true
-	end)
+	end, true)
 	return wrapper, body, controls
 end
 
@@ -2504,7 +2528,8 @@ function Window:_buildPicker()
 	local INSET = (Metrics.PickerKnob + 4) / 2 - 1
 	local function along(scale) return round(INSET - INSET * 2 * scale) end
 	local function fromPointer(position, origin, length)
-		return clamp01((position - origin - INSET) / (length - INSET * 2))
+		local inset = INSET * LayerScale
+		return clamp01((position - origin - inset) / (length - inset * 2))
 	end
 
 	local hue = new("Frame", { BackgroundTransparency = 0, BackgroundColor3 = Color3.new(1, 1, 1), Position = Offset(pad * 2 + svW + 1, pad + 1), Size = Offset(barW - 2, svH - 2), Radius = Metrics.Radius, Border = "Outline" }, body)
@@ -2753,29 +2778,30 @@ function Window:SetVisible(visible)
 	self.Visible = visible
 	self:CloseFloating()
 	self.ModalButton.Visible = visible
-    	if visible and self.Minimized then
+	if visible and self.Minimized then
 		self.Minimized = false
 		self.FloatFader:Hide()
 	end
+	local fit = self.Fit
 	if not self.Scale.Parent then
-		if not visible then self.Scale.Scale = 1 end
+		self.Scale.Scale = visible and fit * 0.97 or fit
 		self.Scale.Parent = self.Holder
 	end
 	if visible then
-		animate(self.Scale, "Scale", 1, "Smooth", {
-			-- A UIScale is removed once idle so text is never resampled at rest.
+		animate(self.Scale, "Scale", fit, "Smooth", {
 			Done = function()
-				if self.Visible then self.Scale.Parent = nil end
+				if self.Visible and self.Fit == 1 then self.Scale.Parent = nil end
 			end,
 		})
 		self.Fader:Show()
 	else
-		animate(self.Scale, "Scale", 0.97, "Fast")
+		animate(self.Scale, "Scale", fit * 0.97, "Fast")
 		self.Fader:Hide()
 	end
 end
 
 function Window:Toggle()
+	if self.Load and not self.Load.Done then return end
 	self:SetVisible(not self.Visible)
 end
 
@@ -3072,6 +3098,7 @@ function Window:_placeOverlays()
     if self.FloatButton and not self.Moved[self.FloatButton] then
 		self.FloatButton.Position = Offset(floor(size.X / 2) - 20, 16)
 	end
+    if self.Loader then self.Loader.Position = Offset(floor(size.X / 2), floor(size.Y / 2)) end
 	if self.Hotkeys and not self.Moved[self.Hotkeys] then self.Hotkeys.Position = Offset(14, floor((size.Y - 300) / 2)) end
 end
 
@@ -3111,6 +3138,139 @@ local function headerButton(parent, iconName, x, hoverColor)
 		icon.Update()
 	end)
 	return button
+end
+
+function Window:_applyFit()
+	local view = self.Screen.AbsoluteSize
+	if view.X <= 0 or view.Y <= 0 then return end
+	local fit = math.min((view.X - 24) / self.Width, (view.Y - 24) / self.Height, 1)
+	fit = math.clamp(floor(fit * 100) / 100, 0.4, 1)
+	LayerScale = fit
+	self.Fit = fit
+	for _, layer in self.Layers do
+		layer.Scale.Scale = fit
+		layer.Frame.Size = Offset(math.ceil(view.X / fit), math.ceil(view.Y / fit))
+	end
+	if self.Visible then
+		snap(self.Scale, "Scale", fit)
+		self.Scale.Parent = fit == 1 and nil or self.Holder
+	end
+end
+
+local function loadFile(key)
+	return "Blossom/load_" .. (string.gsub(key, "[^%w_%-]", "_")) .. ".txt"
+end
+
+function Window:_buildLoader(options)
+	local width, height, pad = 280, 82, 14
+	local frame = new("Frame", {
+		Name = "Loader", Bg = "Background", AnchorPoint = Vec2(0.5, 0.5), Size = Offset(width, height),
+		Radius = Metrics.WindowRadius, Border = "Outline", ZIndex = 60, Visible = false, Active = true,
+	}, self.Screen)
+	addShadow(frame, "Large")
+	makeIcon(frame, "logo", 20, "Accent", "Background", { Position = Offset(pad, 12) })
+	label(frame, { Text = self.Title, TextSize = 14, Weight = Enum.FontWeight.Bold, X = pad + 28, Y = 10, RowH = 24, W = 150 })
+	local percent = label(frame, { Text = "0%", TextSize = 12, Fg = "InactiveText", X = width - pad - 60, Y = 10, RowH = 24, W = 60 })
+	percent.TextXAlignment = Enum.TextXAlignment.Right
+	local counter = label(frame, { Text = "", TextSize = 11, Fg = "InactiveText", X = width - pad - 60, Y = 36, RowH = 16, W = 60 })
+	counter.TextXAlignment = Enum.TextXAlignment.Right
+	local status = label(frame, { Text = "Starting", TextSize = 11, Fg = "InactiveText", X = pad, Y = 36, RowH = 16, Right = pad + 64, Truncate = Enum.TextTruncate.AtEnd })
+	local track = new("Frame", { Bg = "Element", Position = Offset(pad + 1, 61), Size = Offset(width - pad * 2 - 2, 8), Radius = FULL, Border = "Outline" }, frame)
+	local fill = new("Frame", { Bg = "Accent", Size = Dim2(0, 0, 1, 0), Radius = FULL }, track)
+	addGradient(fill)
+
+	local key = options.Script or self.Title
+	local total = options.Total
+	if not total then
+		pcall(function()
+			if typeof(isfile) == "function" and typeof(readfile) == "function" and isfile(loadFile(key)) then
+				total = tonumber(readfile(loadFile(key)))
+			end
+		end)
+	end
+
+	local load = {
+		Active = true, Done = false, Count = 0, Busy = 0, Progress = 0, Total = total, Key = key,
+		Last = os.clock(), Slice = os.clock(), Idle = options.LoadIdle or 0.8, Budget = TouchOnly and 0.01 or 0.014,
+		Frame = frame, Fader = newFader(frame), PercentText = "0%",
+	}
+	function load.Render(value)
+		fill.Size = Dim2(value, 0, 1, 0)
+		local text = floor(value * 100) .. "%"
+		if text ~= load.PercentText then
+			load.PercentText = text
+			setText(percent, text)
+		end
+	end
+	function load.SetStatus(text, count)
+		setText(status, text)
+		local shown = load.Total and load.Total > 0 and (count .. " / " .. load.Total) or tostring(count)
+		setText(counter, shown)
+	end
+	self.Load = load
+	self.Loader = frame
+	load.Fader:Show()
+end
+
+function Window:_tick(kind, name)
+	local load = self.Load
+	if not load or not load.Active then return end
+	load.Count += 1
+	load.Last = os.clock()
+	load.SetStatus(name and ("Creating %s: %s"):format(kind, tostring(name)) or ("Creating " .. kind), load.Count)
+	local goal
+	if load.Total and load.Total > 0 then
+		goal = math.min(load.Count / load.Total, 0.98)
+	else
+		goal = 0.95 * (1 - 1 / (1 + load.Count / 20))
+	end
+	animate(load, "Progress", goal, "Smooth", { Step = load.Render })
+	if os.clock() - load.Slice > load.Budget then
+		task.wait()
+		load.Slice = os.clock()
+	end
+end
+
+function Window:_busy(delta, text)
+	local load = self.Load
+	if not load or not load.Active then return end
+	load.Busy += delta
+	load.Last = os.clock()
+	if text then load.SetStatus(text, load.Count) end
+end
+
+function Window:FinishLoading()
+	local load = self.Load
+	if not load or not load.Active then return end
+	load.Active = false
+	load.SetStatus("Ready", load.Count)
+	if load.Count > 0 then
+		pcall(function()
+			if typeof(writefile) == "function" then
+				if typeof(isfolder) == "function" and not isfolder("Blossom") then makefolder("Blossom") end
+				writefile(loadFile(load.Key), tostring(load.Count))
+			end
+		end)
+	end
+	animate(load, "Progress", 1, "Smooth", {
+		Step = load.Render,
+		Done = function()
+			task.delay(0.15, function() self:_reveal() end)
+		end,
+	})
+end
+
+function Window:_reveal()
+	local load = self.Load
+	if self.Closing or not self.Screen.Parent or load.Done then return end
+	load.Done = true
+	load.Fader:Hide(function()
+		self.Loader = nil
+		load.Frame:Destroy()
+	end)
+	self:SetVisible(true)
+	newFader(self.Watermark):Show()
+	newFader(self.Hotkeys):Show()
 end
 
 local Blossom = { Themes = Themes, ThemeOrder = ThemeOrder, Metrics = Metrics, Fonts = Fonts, NotifyTypes = NotifyTypes }
@@ -3194,20 +3354,26 @@ function Blossom.new(options)
 	win.Dropdowns = new("Frame", { Name = "Dropdowns", Size = Dim2(1, 0, 1, 0), ZIndex = 45 }, screen)
 	win.Notifications = new("Frame", { Name = "Notifications", Position = Offset(16, 16), Size = Dim2(1, -32, 1, -32), ZIndex = 50 }, screen)
 
+	win.Fit = 1
+	win.Layers = {}
+	for _, layer in { win.DragLayer, win.Popups, win.Dropdowns } do
+		table.insert(win.Layers, { Frame = layer, Scale = new("UIScale", nil, layer) })
+	end
 	win:_buildWatermark(options)
 	win:_buildHotkeys()
 	win:_buildKeybindMenu()
 	win:_buildPicker()
 	win:_buildSearch()
-	if options.Resizable ~= false then win:_buildResize() end
-    	win:_buildSearch()
-	if options.Resizable ~= false then win:_buildResize() end
+	if options.Resizable ~= false and not TouchOnly then win:_buildResize() end
 	win:_buildFloatButton()
+	win:_applyFit()
 	win:_placeOverlays()
-	win:_placeOverlays()
-    win:SetNotifyPlacement(options.NotifyPosition, true)
+	win:SetNotifyPlacement(options.NotifyPosition, true)
 	win.WatermarkLayout()
-	table.insert(win.Connections, screen:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() win:_placeOverlays() end))
+	table.insert(win.Connections, screen:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		win:_applyFit()
+		win:_placeOverlays()
+	end))
 
 	win:_makeDraggable(root, holder, function(point) return not win:_overControl(point) end)
 
@@ -3283,6 +3449,12 @@ function Blossom.new(options)
 		clock += dt
 		colorClock += dt
 		win:_flushThemeColors(dt)
+        local load = win.Load
+		if load and load.Active and load.Busy == 0 then
+			local idle = os.clock() - load.Last
+			local limit = load.Total and load.Count >= load.Total and 0.25 or load.Idle
+			if (load.Count > 0 and idle > limit) or idle > 10 then win:FinishLoading() end
+		end
 		if win.OpenDropdown then win.OpenDropdown.Follow() end
 		if win.CurrentTab then
 			for _, column in win.CurrentTab.Columns do
@@ -3320,12 +3492,17 @@ function Blossom.new(options)
 
 	holder.Visible, win.Visible = false, false
 	win.Watermark.Visible, win.Hotkeys.Visible = false, false
-	task.defer(function()
-		if win.Screen.Parent == nil then return end
-		win:SetVisible(true)
-		newFader(win.Watermark):Show()
-		newFader(win.Hotkeys):Show()
-	end)
+	if options.Loading == false then
+		task.defer(function()
+			if win.Screen.Parent == nil then return end
+			win:SetVisible(true)
+			newFader(win.Watermark):Show()
+			newFader(win.Hotkeys):Show()
+		end)
+	else
+		win:_buildLoader(options)
+		win:_placeOverlays()
+	end
 
 	return win
 end
