@@ -2170,7 +2170,7 @@ end
 function Window:SetHotkeyActive(object, active)
 	local entry = self.HotkeyEntries[object]
 	local shouldShow = object.Enabled ~= false and (TouchOnly or (active and object.Key ~= nil))
-	local extra = TouchOnly and 28 or 0
+	local extra = TouchOnly and (object.Tappable and 54 or 28) or 0
 	local function caption()
 		if TouchOnly then return object.Name or "Key" end
 		return (object.Name or "Key") .. " - " .. keyName(object.Key)
@@ -2208,14 +2208,15 @@ function Window:SetHotkeyActive(object, active)
 			hit.MouseButton1Click:Connect(function() owner:Set(not owner.Value) end)
 			entry.Render(false)
 		elseif TouchOnly and object.Tappable then
-			local pill = new("Frame", {
-				Bg = "Accent", AnchorPoint = Vec2(1, 0.5), Position = Dim2(1, -9, 0.5, 0),
-				Size = Offset(20, 10), Radius = FULL, Border = "Outline",
+			local chip = new("Frame", {
+				Bg = "Element", Radius = Metrics.Radius, Border = "Outline",
+				AnchorPoint = Vec2(1, 0.5), Position = Dim2(1, -6, 0.5, 0), Size = Offset(42, 16),
 			}, frame)
-			local hit = new("TextButton", { Size = Dim2(1, 0, 1, 0), ZIndex = 2 }, frame)
+			addGradient(chip)
+			centeredLabel(chip, 42, { Text = "Tap", TextSize = 11, RowH = 16, Fg = "InactiveText" })
+			local hit = new("TextButton", { Size = Dim2(1, 0, 1, 0), ZIndex = 2 }, chip)
+			interactive(chip, "Element", "HoveredElement", "Inline", hit)
 			hit.MouseButton1Click:Connect(function()
-				snap(pill, "Size", Offset(10, 6))
-				animate(pill, "Size", Offset(20, 10), "Knob")
 				if object.OnPress then object.OnPress() end
 			end)
 		end
