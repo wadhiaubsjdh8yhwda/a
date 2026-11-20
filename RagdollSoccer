@@ -23,7 +23,7 @@ if getgenv().MystrixHub then
     task.wait(0.2)
 end
 
-local CURRENT_VERSION = "v1.1.5"
+local CURRENT_VERSION = "v1.1.6"
 local DISCORD_INVITE = "46JkThWjPB"
 local HUB_LOGO = "rbxassetid://85997568026025"
 
@@ -2244,8 +2244,7 @@ function MystrixHub.Functions.KeeperKit()
                 jumpLift = require(tuning).Dive.Jumping.Lift
             end
         end)
-        local dives = {}
-        local reachX = {}
+        local dives, reachX = {}, {}
         for _, dive in ipairs(Reach.dives) do
             if dive.block or not (dive.lift > jumpLift + 0.001) then
                 local rows = {}
@@ -2260,7 +2259,7 @@ function MystrixHub.Functions.KeeperKit()
                     rows[key] = { Vector3.new(v[1], v[2], 0), Vector3.new(v[3], v[4], 0), Vector3.new(v[5], v[6], 0), body, legs }
                     reachX[key] = math.max(reachX[key] or 0, v[1], v[3], v[5])
                 end
-                dives[#dives + 1] = rows
+                dives[#dives + 1] = { rows = rows, power = dive.power, lift = dive.lift, block = dive.block }
             end
         end
         if #dives == 0 then return nil end
@@ -2278,6 +2277,7 @@ function MystrixHub.Functions.KeeperKit()
             shSpeed = Config.ShuffleSpeed,
             shAccel = Config.ShuffleAccel,
             react = Config.Reaction[1],
+            cfg = Config,
         }
     end)
     if ok and type(kit) == "table" then
@@ -2290,24 +2290,29 @@ end
 
 task.spawn(MystrixHub.Functions.KeeperKit)
 
-function MystrixHub.Functions.KeeperGap(lat, y, T)
+function MystrixHub.Functions.KeeperSave(lat, y, T, dist)
     local F = MystrixHub.Functions
     local kit = F.KeeperKit()
     T = math.max(T, 0)
     lat = math.abs(lat)
     if not kit then
-        return lat - (4.8 + 15 * T) - math.max(y - 6.5, 0) * 0.5
+        local gap = lat - (4.8 + 15 * T) - math.max(y - 6.5, 0) * 0.5
+        return gap, gap <= 0 and 0.6 or 0
     end
+    local cfg = kit.cfg
     local accel, speed = kit.shAccel, kit.shSpeed
     local q = speed / accel
     local segGap = F.SegGap
     local best = math.huge
+    local bestCost = 1
+    local need = math.huge
     local p1 = 0
     while p1 <= T + 1e-6 do
         local moved = p1 <= q and 0.5 * accel * p1 * p1 or 0.5 * accel * q * q + speed * (p1 - q)
         local pt = Vector3.new(math.max(lat - moved, 0), y, 0)
         local tm = T - p1
-        for _, rows in ipairs(kit.dives) do
+        for _, dive in ipairs(kit.dives) do
+            local rows = dive.rows
             local n = #rows
             local t = math.clamp(tm / kit.step, 0, n - 1)
             local i = math.floor(t)
@@ -2318,11 +2323,111 @@ function MystrixHub.Functions.KeeperGap(lat, y, T)
             local b1, b2 = r1[4]:Lerp(r2[4], a), r1[5]:Lerp(r2[5], a)
             local g = math.min((pt - h1).Magnitude, (pt - h2).Magnitude) - kit.hand
             g = math.min(g, segGap(pt, h1, e) - kit.arm, segGap(pt, h2, e) - kit.arm, segGap(pt, e, b1) - kit.body, segGap(pt, b1, b2) - kit.leg)
-            if g < best then best = g end
+            local cost = dive.power + cfg.HighCost * dive.lift
+            if g < best then
+                best = g
+                bestCost = cost
+            end
+            if p1 == 0 and g <= 0 and not dive.block and cost < need then
+                need = cost
+            end
         end
         p1 += 0.08
     end
-    return best
+    local save = 0
+    if best <= 0 then
+        if need == math.huge then need = bestCost end
+        local t = math.clamp((dist - cfg.NearShot) / (cfg.FarShot - cfg.NearShot), 0, 1)
+        save = cfg.SaveEasy - (cfg.SaveEasy - cfg.SaveHard) * math.clamp(need, 0, 1) ^ cfg.HardCurve + cfg.DistantBonus * t
+        save = math.clamp(save, 0, 1)
+        if dist >= cfg.SureFrom then save = 1 end
+    end
+    return best, save
+end
+
+function MystrixHub.Functions.KeeperAt(goal, from, keeper, kit)
+    local cfg = kit and kit.cfg
+    if not cfg then return keeper end
+    local oX = -goal.out
+    local dx, dz = from.X - goal.x, from.Z - goal.z
+    local dist = math.sqrt(dx * dx + dz * dz)
+    local ux, uz = oX, 0
+    if dist > 1 then ux, uz = dx / dist, dz / dist end
+    if ux * oX < 0.35 then
+        local sign = uz >= 0 and 1 or -1
+        if math.abs(uz) < 0.001 then sign = 0 end
+        ux, uz = oX * 0.35, sign * 0.9367496997597597
+    end
+    local along = ux * oX
+    local t = math.clamp((dist - cfg.NearBall) / (cfg.FarBall - cfg.NearBall), 0, 1)
+    local depth = cfg.DepthNear + (cfg.DepthFar - cfg.DepthNear) * t
+    local zMax = goal.half - cfg.PostInset
+    local zOff = math.clamp(uz * depth / along, -zMax, zMax)
+    local ballDepth = (goal.x - from.X) * goal.out
+    local absZ = math.abs(from.Z - goal.z)
+    if ballDepth <= 0.5 then
+        depth = cfg.DepthTight
+    elseif absZ > 0.001 then
+        depth = math.clamp(math.abs(zOff) * ballDepth / absZ, cfg.DepthTight, depth)
+    end
+    local sx, sz = goal.x - goal.out * depth, goal.z + zOff
+    local mx, mz = sx - keeper.X, sz - keeper.Z
+    local md = math.sqrt(mx * mx + mz * mz)
+    local travel = cfg.MoveSpeed * (cfg.Reaction[1] + cfg.Reaction[2]) * 0.5
+    if md > travel then
+        local f = travel / md
+        mx, mz = mx * f, mz * f
+    end
+    return Vector3.new(keeper.X + mx, keeper.Y, keeper.Z + mz)
+end
+
+function MystrixHub.Functions.ShotTargets(goal, lob, radius)
+    local F = MystrixHub.Functions
+    local targets = SilentAimState.Targets
+    if targets and #targets > 0 then
+        local list = {}
+        for _, name in ipairs(targets) do
+            local p = F.ShotPoint(goal, name, radius)
+            if p then list[#list + 1] = p end
+        end
+        if #list > 0 then return list, true end
+    end
+    return F.ShotAutoList(goal, lob, radius), false
+end
+
+function MystrixHub.Functions.PitchSolve(env, gy, from, point, speed, minA, maxA, lob, dt, bx, bz, bn, deadline, center)
+    local F = MystrixHub.Functions
+    local dx, dz = point.X - from.X, point.Z - from.Z
+    local d = math.sqrt(dx * dx + dz * dz)
+    if d < 1 then return nil end
+    local ux, uz = dx / d, dz / d
+    local spin = Vector3.new(0, 0, 0)
+    local limitT = math.clamp(d / math.max(speed * 0.45, 6) + 0.8, 1, lob and 8 or 4.5)
+    local lo, hi, iters = minA, maxA, 11
+    if center then
+        lo, hi, iters = math.max(minA, center - 0.05), math.min(maxA, center + 0.05), 8
+    end
+    local best
+    for _ = 1, iters do
+        if deadline and best and os.clock() > deadline then break end
+        local th = (lo + hi) / 2
+        local ct = math.cos(th)
+        local vel = Vector3.new(ux * ct * speed, math.sin(th) * speed, uz * ct * speed)
+        local c, ft, blocked = F.ShotFly(env, gy, from, vel, spin, limitT, bx, bz, bn, dt)
+        if not c then
+            if th > 0.6 then hi = th else lo = th end
+        else
+            local err = c.Y - point.Y
+            local miss = math.abs(err)
+            if not best or miss < best.miss then
+                best = { vel = vel, miss = miss, ft = ft, blocked = blocked, c = c, th = th }
+            end
+            if miss < 0.04 then break end
+            if err > 0 then hi = th else lo = th end
+        end
+    end
+    if not best then return nil end
+    return best.vel, spin, best.miss, best.ft, best.blocked, best.c, best.th
 end
 
 function MystrixHub.Functions.ShotBounds(env)
@@ -2928,7 +3033,7 @@ end
 
 getgenv().MystrixSilentAim.Targets = {}
 getgenv().MystrixSilentAim.TargetKey = "Auto"
-getgenv().MystrixSilentAim.Range = 190
+getgenv().MystrixSilentAim.Range = 300
 MystrixHub.ShotIgnore = { SideFoot = true, PushPass = true, VolleyPass = true, VolleyPush = true }
 MystrixHub.ShotLobs = { Lofted = true, Chip = true }
 MystrixHub.ShotSeeds = {}
@@ -3119,16 +3224,12 @@ end
 function MystrixHub.Functions.ShotGate(from)
     local goal = MystrixHub.Functions.SilentAimGoal()
     if not goal then return nil end
+    if (from.X - goal.x) * goal.out >= 0 then return nil end
     local dx, dz = goal.x - from.X, goal.z - from.Z
     local dist = math.sqrt(dx * dx + dz * dz)
-    if dist < 2 then return nil end
-    if (from.X - goal.x) * goal.out >= 0 then return nil end
-    local range = SilentAimState.Range or 190
-    local H = MystrixHub
-    if H.TrickActive or (H.Force and H.Force.Active) then
-        range = math.max(range, 300)
-    end
-    if dist > range then return nil end
+    if dist < 1.5 then return nil end
+    local range = SilentAimState.Range or 300
+    if range < 300 and dist > range then return nil end
     return goal
 end
 
@@ -3171,7 +3272,13 @@ function MystrixHub.Functions.ShotFly(env, gy, from, vel, spin, limitT, bx, bz, 
     local Flight = SilentAimState.Flight
     local params = env.Params
     local goal = env.Goal
-    local gx, out = goal.x, goal.out
+    local gx, gz, out = goal.x, goal.z, goal.out
+    local radius = env.Radius
+    local q = (goal.top - goal.ground) / 8.714285714285714
+    local pr = 0.2143 * q
+    local postZ = goal.half + pr
+    local barY = goal.top + pr
+    local reachR = radius + pr + 0.05
     local airStep, rollStep = Flight.airStep, Flight.rollStep
     local bounce, toGround, bounceMin = Flight.bounce, Flight.toGround, Flight.BOUNCE_MIN
     local pos, v, s = from, vel, spin
@@ -3184,6 +3291,7 @@ function MystrixHub.Functions.ShotFly(env, gy, from, vel, spin, limitT, bx, bz, 
     local dt = stepDt or 1 / 60
     local t = 0
     local blocked = false
+    local framed = false
     local fx, fz = from.X, from.Z
     local step = 0
     while t < limitT do
@@ -3191,7 +3299,7 @@ function MystrixHub.Functions.ShotFly(env, gy, from, vel, spin, limitT, bx, bz, 
         if rolling then
             np, nv, ns = rollStep(pos, v, s, dt, params)
             if nv.X * nv.X + nv.Z * nv.Z < 0.04 then
-                return nil, t, blocked
+                return nil, t, blocked, framed
             end
         else
             np, nv, ns = airStep(pos, v, s, dt, params)
@@ -3216,13 +3324,33 @@ function MystrixHub.Functions.ShotFly(env, gy, from, vel, spin, limitT, bx, bz, 
                 local a = d1 / (d1 - d2)
                 kp.t = t + dt * a
                 kp.pos = pos:Lerp(np, a)
-                return np, t, blocked
             end
         end
         if (np.X - gx) * out >= 0 then
-            local dx = np.X - pos.X
-            local a = dx ~= 0 and math.clamp((gx - pos.X) / dx, 0, 1) or 1
-            return pos:Lerp(np, a), t + dt * a, blocked
+            local dxs = np.X - pos.X
+            local a = dxs ~= 0 and math.clamp((gx - pos.X) / dxs, 0, 1) or 1
+            local cp = pos:Lerp(np, a)
+            local hx, hy, hz = np.X - pos.X, np.Y - pos.Y, np.Z - pos.Z
+            local hm = math.sqrt(hx * hx + hz * hz)
+            local ez = cp.Z - gz
+            if hm > 1e-6 and cp.Y <= barY + radius + 0.5 then
+                local uz = hz / hm
+                local ax = math.abs(hx / hm)
+                local d1 = postZ - ez
+                local d2 = -postZ - ez
+                local e1 = (d1 * uz < 0) and math.abs(d1) * ax or math.abs(d1)
+                local e2 = (d2 * uz < 0) and math.abs(d2) * ax or math.abs(d2)
+                if e1 < reachR or e2 < reachR then framed = true end
+            end
+            local hn = math.sqrt(hx * hx + hy * hy)
+            if hn > 1e-6 and math.abs(ez) <= postZ then
+                local dy = barY - cp.Y
+                local uyn = hy / hn
+                local uxn = math.abs(hx) / hn
+                local eb = (dy * uyn < 0) and math.abs(dy) * uxn or math.abs(dy)
+                if eb < reachR then framed = true end
+            end
+            return cp, t + dt * a, blocked, framed
         end
         if bn > 0 and not blocked and np.Y - gy < 7 then
             step += 1
@@ -3242,7 +3370,7 @@ function MystrixHub.Functions.ShotFly(env, gy, from, vel, spin, limitT, bx, bz, 
         pos, v, s = np, nv, ns
         t += dt
     end
-    return nil, t, blocked
+    return nil, t, blocked, framed
 end
 
 function MystrixHub.Functions.ShotBest(from, family, lob, budget, minAngle, mode)
@@ -3271,27 +3399,28 @@ function MystrixHub.Functions.ShotBest(from, family, lob, budget, minAngle, mode
     end
     local minA = minAngle or (lob and 0.35 or -0.9)
     local maxA = lob and 1.3 or 0.8
-    local keeper = F.SilentAimKeeper(goal)
-    local kx = keeper and keeper.X or goal.x - goal.out * 6
-    local kz = keeper and keeper.Z or goal.z
+    local kit = F.KeeperKit()
+    local keeperNow = F.SilentAimKeeper(goal)
+    local kpos = keeperNow and F.KeeperAt(goal, from, keeperNow, kit) or nil
+    local kx = kpos and kpos.X or goal.x - goal.out * 6
+    local kz = kpos and kpos.Z or goal.z
     local oX = -goal.out
     local bx, bz, bn = F.ShotBodies(goal, lob)
     local curveOn = SA.AutoCurve == true and not lob and flatD >= 8 and not (fam and fam.header)
     local k = math.min(math.clamp(30 + flatD * 0.5, 40, 70) * (SA.CurveAmount or 1), 72)
     local zLim, yMin, yMax = F.ShotBounds(env)
-    local kit = F.KeeperKit()
-    local react = kit and math.max(kit.react - 0.03, 0.1) or 0.2
+    local react = kit and math.max(kit.cfg.Reaction[1] - 0.03, 0.1) or 0.2
     local now = os.clock()
     local deadline = budget and (now + budget) or nil
-    local targets = SA.Targets
+    local points, targeted = F.ShotTargets(goal, lob, radius)
     local cache = MystrixHub.ShotCache
-    local simDt = lob and 1 / 45 or 1 / 60
     local light = mode ~= "strike"
+    local simDt = lob and 1 / 45 or 1 / 60
     if light then
         simDt = lob and 1 / 30 or 1 / 40
     end
-    local candIters = light and 6 or nil
-    local tol = 0.4
+    local candIters = light and 6 or 10
+    local tol = 0.45
     local best, fallback, loose
 
     local function faceFor(vel)
@@ -3309,23 +3438,38 @@ function MystrixHub.Functions.ShotBest(from, family, lob, budget, minAngle, mode
         return fx, fz
     end
 
-    local function evaluate(p, curve, iters, dl)
-        local sign = curve > 0 and 1 or curve < 0 and -1 or 0
-        local seedKey = (((math.floor(p.Z * 2) + 2000) * 4096 + (math.floor(p.Y * 2) + 2000)) * 8 + (sign + 1) * 2 + (lob and 1 or 0)) * 2 + (goal.out > 0 and 1 or 0)
-        local vel, spin, miss, ft, blocked, c = F.ShotSolve(env, gy, from, p, speed, curve, minA, maxA, seedKey, bx, bz, bn, lob, simDt, iters, dl)
+    local function evaluate(p, curve, dl)
+        local vel, spin, miss, ft, blocked, c, extra
+        local key
+        if curve == 0 then
+            vel, spin, miss, ft, blocked, c, extra = F.PitchSolve(env, gy, from, p, speed, minA, maxA, lob, simDt, bx, bz, bn, dl)
+        else
+            local sign = curve > 0 and 1 or -1
+            key = ((((math.floor(p.Z * 2) + 2000) * 4096 + (math.floor(p.Y * 2) + 2000)) * 8 + (sign + 1) * 2 + (lob and 1 or 0)) * 2 + (goal.out > 0 and 1 or 0))
+            vel, spin, miss, ft, blocked, c = F.ShotSolve(env, gy, from, p, speed, curve, minA, maxA, key, bx, bz, bn, lob, simDt, candIters, dl)
+        end
         if not vel then return nil end
         local dz = math.abs(c.Z - goal.z)
         if dz > goal.half - 0.8 or c.Y < yMin or c.Y > goal.top - 0.4 then return nil end
         local fx, fz = faceFor(vel)
         local kp = { x = kx, z = kz, fx = fx, fz = fz, ahead = 0.8 }
-        F.ShotFly(env, gy, from, vel, spin, ft + 0.3, bx, bz, 0, simDt, kp)
+        local _, _, _, framed = F.ShotFly(env, gy, from, vel, spin, ft + 0.5, bx, bz, 0, simDt, kp)
         local mp, mt = kp.pos or c, kp.t or ft
-        local lat = -(mp.X - kx) * fz + (mp.Z - kz) * fx
-        local gap = F.KeeperGap(lat, mp.Y - pitchY, mt - react)
+        local lat = (mp.X - kx) * -fz + (mp.Z - kz) * fx
+        local gap, save = F.KeeperSave(lat, mp.Y - pitchY, mt - react, flatD)
+        local pg
+        if gap >= 1.2 then
+            pg = 1
+        elseif gap <= 0 then
+            pg = 1 - save
+        else
+            pg = (1 - save) + save * gap / 1.2
+        end
         local edge = math.min(zLim - dz, yMax - c.Y)
-        local score = math.min(gap, 2.5) * 4 + math.max(gap - 2.5, 0) * 0.5 + math.min(edge, 1.5) * 1.2 - ft * 1.5 - miss * 5
-        if blocked then score -= 15 end
-        if curve ~= 0 then score += 0.4 end
+        local penalty = 1
+        if blocked then penalty *= 0.1 end
+        if framed then penalty *= 0.05 end
+        local score = pg * penalty * 100 + math.min(gap, 3) * 1.5 + math.min(edge, 1.5) * 2 - ft - miss * 8
         return {
             vel = vel,
             spin = spin,
@@ -3334,29 +3478,34 @@ function MystrixHub.Functions.ShotBest(from, family, lob, budget, minAngle, mode
             miss = miss,
             time = ft,
             blocked = blocked,
+            framed = framed,
             cross = c,
-            key = seedKey,
+            key = key,
+            th = extra,
             gap = gap,
+            pg = pg,
             edge = edge,
             score = score,
-            strict = edge >= 0 and miss <= tol,
+            strict = edge >= 0 and miss <= tol and not framed,
         }
     end
 
-    local function take(entry)
-        if not entry then return end
-        if entry.strict then
-            if entry.blocked then
-                entry.fallback = true
-                if not fallback or entry.score > fallback.score then fallback = entry end
-            elseif not best or entry.score > best.score then
-                best = entry
-            end
-        elseif entry.miss <= 2.5 then
-            entry.fallback = true
-            entry.score = -entry.miss
-            if not loose or entry.score > loose.score then loose = entry end
+    local function take(e)
+        if not e then return end
+        if e.strict and not e.blocked then
+            if not best or e.score > best.score then best = e end
+        elseif e.strict or e.framed then
+            e.fallback = true
+            if not fallback or e.score > fallback.score then fallback = e end
+        elseif targeted or e.miss <= 2.5 then
+            e.fallback = true
+            e.score = -e.miss
+            if not loose or e.score > loose.score then loose = e end
         end
+    end
+
+    local function inward(p)
+        return Vector3.new(p.X, goal.ground + (p.Y - goal.ground) * 0.82, goal.z + (p.Z - goal.z) * 0.6)
     end
 
     local function coarse(p)
@@ -3388,27 +3537,17 @@ function MystrixHub.Functions.ShotBest(from, family, lob, budget, minAngle, mode
     end
     local settled = false
     if plan then
-        local entry = evaluate(plan.point, plan.curve, 5, nil)
+        local entry = evaluate(plan.point, plan.curve, nil)
         if entry and entry.strict and not entry.blocked then
             entry.score += 1
             take(entry)
-            settled = entry.gap >= 1.2 and entry.edge >= 0.4
+            settled = entry.pg >= 0.95 and entry.edge >= 0.4
         else
             cache[key] = nil
         end
     end
 
     if not settled then
-        local points = {}
-        if targets and #targets > 0 then
-            for _, name in ipairs(targets) do
-                local p = F.ShotPoint(goal, name, radius)
-                if p then points[#points + 1] = p end
-            end
-        end
-        if #points == 0 then
-            points = F.ShotAutoList(goal, lob, radius)
-        end
         local ranked = {}
         for i, p in ipairs(points) do
             ranked[i] = { point = p, score = coarse(p), i = i }
@@ -3417,7 +3556,7 @@ function MystrixHub.Functions.ShotBest(from, family, lob, budget, minAngle, mode
             if a.score ~= b.score then return a.score > b.score end
             return a.i < b.i
         end)
-        local M = math.min(#ranked, 12)
+        local M = math.min(#ranked, targeted and #ranked or 14)
         if M > 0 then
             local cursors = MystrixHub.ShotCursor
             local count = mode == "strike" and M or (mode == "preview" and 1 or math.min(M, 3))
@@ -3426,15 +3565,24 @@ function MystrixHub.Functions.ShotBest(from, family, lob, budget, minAngle, mode
             for j = 0, count - 1 do
                 local item = ranked[(first - 1 + j) % M + 1]
                 local dl = (mode ~= "strike" or best or fallback or loose) and deadline or nil
-                take(evaluate(item.point, 0, candIters, dl))
-                if curveOn and j < 2 then
-                    take(evaluate(item.point, k, candIters, dl))
-                    take(evaluate(item.point, -k, candIters, dl))
+                local e = evaluate(item.point, 0, dl)
+                take(e)
+                if e and e.framed then
+                    take(evaluate(inward(item.point), 0, dl))
+                end
+                if curveOn then
+                    local weak = (not e) or (not e.strict) or e.gap < 1.5 or e.blocked
+                    if j < 3 or (weak and j < 8) then
+                        take(evaluate(item.point, k, dl))
+                        take(evaluate(item.point, -k, dl))
+                        if weak then
+                            take(evaluate(item.point, k * 0.5, dl))
+                            take(evaluate(item.point, -k * 0.5, dl))
+                        end
+                    end
                 end
                 tried += 1
-                if best and best.gap >= 2 and best.edge >= 0.6 then break end
-                if mode == "strike" and best and tried >= 4 and best.gap >= 0.8 then break end
-                if mode == "strike" and best and tried >= 6 then break end
+                if not targeted and best and best.pg >= 0.97 and best.edge >= 0.8 then break end
                 if deadline and os.clock() > deadline and (best or fallback or loose or mode ~= "strike") then break end
             end
             if mode ~= "strike" then
@@ -3453,7 +3601,12 @@ function MystrixHub.Functions.ShotBest(from, family, lob, budget, minAngle, mode
     end
 
     if mode == "strike" then
-        local vel, spin, miss, ft, blocked, c = F.ShotSolve(env, gy, from, result.point, speed, result.curve, minA, maxA, result.key, bx, bz, bn, lob, lob and 1 / 90 or 1 / 120, 6, nil)
+        local vel, spin, miss, ft, blocked, c
+        if result.curve == 0 then
+            vel, spin, miss, ft, blocked, c = F.PitchSolve(env, gy, from, result.point, speed, minA, maxA, lob, 1 / 120, bx, bz, bn, nil, result.th)
+        elseif result.key then
+            vel, spin, miss, ft, blocked, c = F.ShotSolve(env, gy, from, result.point, speed, result.curve, minA, maxA, result.key, bx, bz, bn, lob, lob and 1 / 90 or 1 / 120, 8, nil)
+        end
         if vel and c then
             local dz = math.abs(c.Z - goal.z)
             if dz <= goal.half - 0.8 and c.Y >= yMin and c.Y <= goal.top - 0.4 and miss <= math.max(result.miss + 0.3, 0.6) then
@@ -3479,11 +3632,10 @@ end
 function MystrixHub.Functions.ShotFallback(from, family, lob)
     local F = MystrixHub.Functions
     local SA = SilentAimState
+    local goal = F.SilentAimGoal()
+    if not goal then return nil end
     local env = F.ShotEnv()
-    if not env then return nil end
-    local goal = env.Goal
-    local gy = SA.BallView.groundBallY(from)
-    local fam = SA.Families[family]
+    local fam = SA.Families and SA.Families[family]
     local cap = 125
     if fam and fam.speed then
         local top = math.max(fam.speed[2], fam.shotSpeed and fam.shotSpeed[2] or 0)
@@ -3491,63 +3643,174 @@ function MystrixHub.Functions.ShotFallback(from, family, lob)
     end
     local dx, dz = goal.x - from.X, goal.z - from.Z
     local flatD = math.sqrt(dx * dx + dz * dz)
+    if flatD < 1 then return nil end
+    local gravity = env and env.Params.gravity or 46
     local speed = cap
     if lob then
         local factor = 1.2 + 0.35 * math.clamp(flatD / 90, 0, 1)
-        speed = math.clamp(math.sqrt(env.Params.gravity * math.max(flatD, 12)) * factor, 22, cap)
+        speed = math.clamp(math.sqrt(gravity * math.max(flatD, 12)) * factor, 22, cap)
     end
     local minA = lob and 0.35 or -0.9
     local maxA = lob and 1.3 or 0.8
+    local radius = env and env.Radius or 0.84
+    local points, targeted = F.ShotTargets(goal, lob, radius)
     local keeper = F.SilentAimKeeper(goal)
     local kz = keeper and keeper.Z or goal.z
-    local zl = goal.half - env.Radius - 1.5
-    local y0 = goal.ground + env.Radius + 0.3
-    local y1 = goal.top - env.Radius - 1.6
-    local list = {}
-    for _, zf in ipairs({ 0.85, -0.85, 0.6, -0.6, 0.3, -0.3 }) do
-        for _, yf in ipairs(lob and { 0.8, 0.6 } or { 0.7, 0.2, 0.45 }) do
-            local p = Vector3.new(goal.x, y0 + (y1 - y0) * yf, goal.z + zl * zf)
-            list[#list + 1] = { p = p, d = math.abs(p.Z - kz) }
+    local ordered = {}
+    for i, p in ipairs(points) do
+        ordered[i] = { p = p, d = targeted and 0 or math.abs(p.Z - kz), i = i }
+    end
+    table.sort(ordered, function(a, b)
+        if a.d ~= b.d then return a.d > b.d end
+        return a.i < b.i
+    end)
+    if env and SA.BallView then
+        local gy = SA.BallView.groundBallY(from)
+        local deadline = os.clock() + F.Budget(0.012)
+        local bestVel, bestSpin, bestMiss
+        bestMiss = math.huge
+        for _, item in ipairs(ordered) do
+            local vel, spin, miss = F.PitchSolve(env, gy, from, item.p, speed, minA, maxA, lob, 1 / 45, {}, {}, 0, nil)
+            if vel and miss < bestMiss then
+                bestVel, bestSpin, bestMiss = vel, spin, miss
+            end
+            if bestMiss < 0.5 or (bestVel and os.clock() > deadline) then break end
+        end
+        if bestVel then
+            return { vel = bestVel, spin = bestSpin }
         end
     end
-    table.sort(list, function(a, b) return a.d > b.d end)
-    local deadline = os.clock() + F.Budget(0.008)
-    local best, bestMiss = nil, math.huge
-    for i, item in ipairs(list) do
-        local vel, spin, miss = F.ShotSolve(env, gy, from, item.p, speed, 0, minA, maxA, "fb" .. i .. (lob and "l" or "g"), {}, {}, 0, lob, nil, 10, nil)
-        if vel and miss < bestMiss then
-            best, bestMiss = { vel = vel, spin = spin }, miss
-        end
-        if bestMiss < 0.5 then break end
-        if best and os.clock() > deadline then break end
-    end
-    return best
+    local p = ordered[1].p
+    local px, pz = p.X - from.X, p.Z - from.Z
+    local pd = math.sqrt(px * px + pz * pz)
+    if pd < 1 then return nil end
+    local t = pd / (speed * 0.7)
+    local ang = math.clamp(math.atan2(p.Y - from.Y + gravity * 0.5 * t * t, math.max(pd, 1)), minA, maxA)
+    local vel = Vector3.new(px / pd * math.cos(ang) * speed, math.sin(ang) * speed, pz / pd * math.cos(ang) * speed)
+    return { vel = vel, spin = Vector3.new(0, 0, 0) }
 end
-
 function MystrixHub.Functions.SilentAimRedirect(from, vel, spin, family)
     local F = MystrixHub.Functions
-    if type(family) ~= "string" or MystrixHub.ShotIgnore[family] then return nil end
-    if not F.ShotGate(from) then return nil end
+    local SA = SilentAimState
+    local stats = SA.Stats
+    if not stats then
+        stats = { calls = 0, redirected = 0, last = "" }
+        SA.Stats = stats
+    end
+    stats.calls += 1
+    if type(family) ~= "string" or MystrixHub.ShotIgnore[family] then
+        stats.last = "ignored family " .. tostring(family)
+        return nil
+    end
+    if not F.ShotGate(from) then
+        stats.last = "gate"
+        return nil
+    end
+    local now = os.clock()
+    local last = SA.StrikeCache
+    if last and last.family == family and now - last.at < 0.35 and (last.from - from).Magnitude < 0.5 then
+        stats.redirected += 1
+        stats.last = "cached"
+        return last.vel, last.spin
+    end
+    local pend = SA.Pending
+    if pend and pend.family == family and now - pend.at < 1.2 and (pend.from - from).Magnitude < 0.8 then
+        SA.Pending = nil
+        SA.StrikeCache = { from = from, family = family, vel = pend.vel, spin = pend.spin, at = now }
+        stats.redirected += 1
+        stats.last = "plan"
+        return pend.vel, pend.spin
+    end
+    local nv, ns = F.SilentAimSolve(from, family)
+    if nv then
+        SA.StrikeCache = { from = from, family = family, vel = nv, spin = ns, at = now }
+        stats.redirected += 1
+        stats.last = "ok"
+        return nv, ns
+    end
+    stats.last = "no solution"
+    return nil
+end
+function MystrixHub.Functions.SilentAimSolve(from, family)
+    local F = MystrixHub.Functions
+    local SA = SilentAimState
     local lob = MystrixHub.ShotLobs[family] == true
-    local ok, result = pcall(F.ShotBest, from, family, lob, F.Budget(0.01), nil, "strike")
+    local ok, result = pcall(F.ShotBest, from, family, lob, F.Budget(0.012), nil, "strike")
     if not ok then
-        SilentAimState.LastError = tostring(result)
+        SA.LastError = tostring(result)
         result = nil
     end
-    if not result then
-        local ok2, fallback = pcall(F.ShotFallback, from, family, lob)
+    if not (result and result.vel) then
+        local ok2, fb = pcall(F.ShotFallback, from, family, lob)
         if ok2 then
-            result = fallback
+            result = fb
         else
-            SilentAimState.LastError = tostring(fallback)
+            SA.LastError = tostring(fb)
+            result = nil
         end
     end
-    if result then
+    if result and result.vel then
         return result.vel, result.spin
     end
     return nil
 end
 
+function MystrixHub.Functions.SilentAimPlan(plan)
+    local F = MystrixHub.Functions
+    local SA = SilentAimState
+    local family = plan.family
+    if type(family) ~= "string" or MystrixHub.ShotIgnore[family] then return nil end
+    local from = plan.ball
+    if not F.ShotGate(from) then return nil end
+    local vel, spin = F.SilentAimSolve(from, family)
+    if not vel then return nil end
+    SA.Pending = { from = from, family = family, vel = vel, spin = spin, at = os.clock() }
+    return vel, spin
+end
+
+function MystrixHub.Functions.InstallPlanSync()
+    local SA = getgenv().MystrixSilentAim
+    if SA.PlanHooked then return true end
+    if not (hookmetamethod and getnamecallmethod and setnamecallmethod and newcclosure) then return false end
+    local old
+    old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local state = getgenv().MystrixSilentAim
+        if state.Enabled and state.PlanSync ~= false and getnamecallmethod() == "FireServer" then
+            local plan = ...
+            if type(plan) == "table"
+                and plan.hold ~= true
+                and typeof(plan.ball) == "Vector3"
+                and type(plan.family) == "string"
+                and plan.power ~= nil
+                and plan.leg ~= nil
+                and typeof(plan.dir) == "Vector3" then
+                local H = getgenv().MystrixHub
+                local F = H and H.Functions
+                if F then
+                    local ok, vel, spin = pcall(F.SilentAimPlan, plan)
+                    setnamecallmethod("FireServer")
+                    if ok and vel then
+                        local copy = table.clone(plan)
+                        local m = math.sqrt(vel.X * vel.X + vel.Z * vel.Z)
+                        if m > 0.001 then
+                            copy.dir = Vector3.new(vel.X / m, 0, vel.Z / m)
+                        end
+                        if typeof(plan.vel) == "Vector3" then
+                            copy.vel = vel
+                        end
+                        if typeof(plan.spin) == "Vector3" and spin then
+                            copy.spin = spin
+                        end
+                        return old(self, copy, select(2, ...))
+                    end
+                end
+            end
+        end
+        return old(self, ...)
+    end))
+    SA.PlanHooked = true
+    return true
+end
 function MystrixHub.Functions.CurrentFamily()
     local name = MystrixHub.ShotFamily
     if name and os.clock() - (MystrixHub.ShotFamilyAt or 0) < 0.6 then
@@ -3657,16 +3920,37 @@ function MystrixHub.Functions.InstallPickTrack()
     end)
     if not ok or type(Select) ~= "table" or type(Select.pick) ~= "function" or not hookfunction then return end
     local orig
-    local function wrapper(...)
-        local result = orig(...)
-        if type(result) == "table" and type(result.family) == "table" and type(result.family.name) == "string" then
-            local H = getgenv().MystrixHub
-            if H then
-                H.ShotFamily = result.family.name
-                H.ShotFamilyAt = os.clock()
+    local function wrapper(self, forced)
+        local H = getgenv().MystrixHub
+        local state = getgenv().MystrixSilentAim
+        local input = self
+        if H and type(self) == "table" then
+            H.KickIntent = self.intent
+            H.KickIntentAt = os.clock()
+            if state.Enabled and (self.intent == "Shoot" or self.intent == "Lob") then
+                pcall(function()
+                    local char = LocalPlayer.Character
+                    local root = char and char:FindFirstChild("Root")
+                    if not root then return end
+                    local p = root.Position
+                    local dir = H.Functions.KickGoalDir(p.X, p.Z)
+                    if dir then
+                        local copy = table.clone(self)
+                        copy.aimDir = dir
+                        copy.travel = dir
+                        copy.facing = dir
+                        copy.sideStepping = false
+                        input = copy
+                    end
+                end)
             end
         end
-        return result
+        local result, second = orig(input, forced)
+        if type(result) == "table" and type(result.family) == "table" and type(result.family.name) == "string" and H then
+            H.ShotFamily = result.family.name
+            H.ShotFamilyAt = os.clock()
+        end
+        return result, second
     end
     local hok, res = pcall(hookfunction, Select.pick, wrapper)
     if hok and res then
@@ -3679,55 +3963,121 @@ function MystrixHub.Functions.InstallSilentAim()
     local F = MystrixHub.Functions
     local SA = getgenv().MystrixSilentAim
     SA.Redirect = F.SilentAimRedirect
+    local ok, DribbleClient = pcall(function()
+        return require(LocalPlayer:WaitForChild("PlayerScripts"):WaitForChild("Client"):WaitForChild("Game"):WaitForChild("DribbleClient"))
+    end)
+    if not (ok and type(DribbleClient) == "table") then
+        return false
+    end
+    if SA.HookedModule ~= DribbleClient then
+        SA.Hooked = false
+        SA.HookedModule = nil
+        SA.PickHooked = nil
+        SA.PlanAimHooked = nil
+        SA.PreviewShowHooked = nil
+        SA.PreviewShowHooking = nil
+        SA.BallView = nil
+        SA.Flight = nil
+        SA.Families = nil
+        SA.KeeperRules = nil
+        SA.Radius = nil
+        MystrixHub.ShotEnvCache = nil
+        MystrixHub.GoalCache = nil
+    end
     F.SilentAimModules()
     F.InstallPickTrack()
+    pcall(F.InstallPlanAim)
     if not SA.Hooked then
-        local ok, DribbleClient = pcall(function()
-            return require(LocalPlayer:WaitForChild("PlayerScripts"):WaitForChild("Client"):WaitForChild("Game"):WaitForChild("DribbleClient"))
-        end)
-        if ok and type(DribbleClient) == "table" then
-            local installed = 0
-            for _, name in ipairs({ "strike", "strikeFree" }) do
-                local fn = DribbleClient[name]
-                if type(fn) == "function" then
-                    local orig
-                    local function wrapper(from, vel, spin, family, t)
-                        if SA.Enabled and SA.Redirect and type(family) == "string" and typeof(from) == "Vector3" and typeof(vel) == "Vector3" then
-                            local rok, newVel, newSpin = pcall(SA.Redirect, from, vel, spin, family)
-                            if rok then
-                                if newVel then
-                                    SA.LastVel = newVel
-                                    SA.LastAt = os.clock()
-                                    vel = newVel
-                                    spin = newSpin or spin
-                                    local H = getgenv().MystrixHub
-                                    if H then H.ShotLast = nil end
-                                end
-                            else
-                                SA.LastError = tostring(newVel)
+        local installed = 0
+        for _, name in ipairs({ "strike", "strikeFree" }) do
+            local fn = DribbleClient[name]
+            if type(fn) == "function" then
+                local orig
+                local function wrapper(from, vel, spin, family, t)
+                    if SA.Enabled and SA.Redirect and type(family) == "string" and typeof(from) == "Vector3" and typeof(vel) == "Vector3" then
+                        local rok, newVel, newSpin = pcall(SA.Redirect, from, vel, spin, family)
+                        if rok then
+                            if newVel then
+                                SA.LastVel = newVel
+                                SA.LastAt = os.clock()
+                                vel = newVel
+                                spin = newSpin or spin
+                                local H = getgenv().MystrixHub
+                                if H then H.ShotLast = nil end
                             end
+                        else
+                            SA.LastError = tostring(newVel)
                         end
-                        return orig(from, vel, spin, family, t)
                     end
-                    if hookfunction then
-                        local hok, result = pcall(hookfunction, fn, wrapper)
-                        if hok and result then
-                            orig = result
-                            installed += 1
-                        end
-                    else
-                        orig = fn
-                        if pcall(function() DribbleClient[name] = wrapper end) then
-                            installed += 1
-                        end
+                    return orig(from, vel, spin, family, t)
+                end
+                if hookfunction then
+                    local hok, result = pcall(hookfunction, fn, wrapper)
+                    if hok and result then
+                        orig = result
+                        installed += 1
+                    end
+                else
+                    orig = fn
+                    if pcall(function() DribbleClient[name] = wrapper end) then
+                        installed += 1
                     end
                 end
             end
-            SA.Hooked = installed > 0
         end
+        SA.Hooked = installed > 0
+        SA.HookedModule = SA.Hooked and DribbleClient or nil
     end
+    pcall(F.InstallPlanSync)
     F.StartShotTick()
     return SA.Hooked == true
+end
+
+function MystrixHub.Functions.KickGoalDir(x, z)
+    local F = MystrixHub.Functions
+    local goal = F.SilentAimGoal()
+    if not goal then return nil end
+    if (x - goal.x) * goal.out >= 0 then return nil end
+    local dx, dz = goal.x - x, goal.z - z
+    local m = math.sqrt(dx * dx + dz * dz)
+    if m < 1.5 then return nil end
+    local range = SilentAimState.Range or 300
+    if range < 300 and m > range then return nil end
+    return Vector3.new(dx / m, 0, dz / m)
+end
+
+function MystrixHub.Functions.InstallPlanAim()
+    local SA = getgenv().MystrixSilentAim
+    if SA.PlanAimHooked or not hookfunction then return end
+    local ok, Plan = pcall(function()
+        return require(Services.ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Game"):WaitForChild("Kick")).Plan
+    end)
+    if not ok or type(Plan) ~= "table" or type(Plan.find) ~= "function" then return end
+    local orig
+    local function wrapper(self, ...)
+        local H = getgenv().MystrixHub
+        local state = getgenv().MystrixSilentAim
+        if H and state.Enabled and type(self) == "table" and typeof(self.pos) == "Vector3" then
+            local intent = H.KickIntent
+            if (intent == "Shoot" or intent == "Lob") and os.clock() - (H.KickIntentAt or 0) < 0.15 then
+                local ball = self.pos
+                if type(self.ballAt) == "function" and self.now then
+                    local bok, bp = pcall(self.ballAt, self.now)
+                    if bok and typeof(bp) == "Vector3" then ball = bp end
+                end
+                local dir = H.Functions.KickGoalDir(ball.X, ball.Z)
+                if dir then
+                    self.aimDir = dir
+                end
+            end
+        end
+        return orig(self, ...)
+    end
+    local hok, res = pcall(hookfunction, Plan.find, wrapper)
+    if hok and res then
+        orig = res
+        SA.PlanAimHooked = true
+    end
 end
 
 function MystrixHub.Functions.InstallPreviewSpoof()
@@ -4303,7 +4653,7 @@ pcall(function()
 end)
 local gameName = "RagdollSoccer"
 local Window = lib.new({
-    Title = "Mystrix Hub", Script = "V1.0.0", Build = CurrentGameName, NotifyPosition = "Bottom Right",ConfigFolder = "Mystrix/" .. gameName .. "/configs",
+    Title = "Mystrix Hub", Script = CURRENT_VERSION, Build = CurrentGameName, NotifyPosition = "Bottom Right",ConfigFolder = "Mystrix/" .. gameName .. "/configs",
 })
 
 MystrixHub.UIController.Window = Window
@@ -4350,7 +4700,7 @@ SilentAimSection:Slider({
     Min = 20,
     Max = 300,
     Suffix = "st",
-    Default = 200,
+    Default = 300,
     Callback = function(value)
         getgenv().MystrixSilentAim.Range = value
     end,
