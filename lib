@@ -1034,12 +1034,14 @@ end
 
 local function layoutSlots(item)
 	local x = 0
+	local area = item.SlotAreaH or Metrics.Row
 	for _, slot in item.Slots do
 		x += slot.Gap
-		slot.Frame.Position = Dim2(1, -x - 1, 0, floor((Metrics.Row - slot.Height) / 2) + 1)
+		slot.Frame.Position = Dim2(1, -x - 1, 0, floor((area - slot.Height) / 2) + 1)
 		x += slot.Width
 	end
 	if item.Label then item.Label.Size = Dim2(1, -(x + Metrics.Gap), 0, Metrics.Row) end
+	if item.OnSlots then item.OnSlots(x) end
 end
 
 local function addSlot(item, frame, width, height, gap)
@@ -1713,15 +1715,36 @@ end
 
 function Section:Button(options)
 	local item = self:_item(Metrics.ButtonH, "Button", options.Name)
-	if options.Description then self.Window:_describe(item, options.Description) end
 	local win = self.Window
 	local button = new("TextButton", { Position = Offset(1, 1), Size = Dim2(1, -2, 0, Metrics.ButtonH - 2), Radius = Metrics.Radius, Border = "Outline", BackgroundTransparency = 0 }, item.Frame)
 	interactive(button, "Element", "HoveredElement", "Inline")
 	addGradient(button)
 	local _, setWidth = centeredLabel(button, trackWidth(win), { Text = options.Name, TextSize = 13, RowH = Metrics.ButtonH - 2 })
-	table.insert(win.ResizeJobs, function() setWidth(trackWidth(win)) end)
 	local object = { Item = item, Instance = button, Callback = options.Callback }
+
+	local function resize(extra)
+		item.Extra = extra
+		button.Size = Dim2(1, -2 - extra, 0, Metrics.ButtonH - 2)
+		setWidth(trackWidth(win) - extra)
+	end
+	table.insert(win.ResizeJobs, function() setWidth(trackWidth(win) - (item.Extra or 0)) end)
 	button.MouseButton1Click:Connect(function() fire(object.Callback) end)
+
+	if options.Keybind ~= nil or options.Bindable then
+		item.SlotAreaH = Metrics.ButtonH
+		item.OnSlots = function(x) resize(x > 0 and x + Metrics.Gap or 0) end
+		local key = typeof(options.Keybind) == "EnumItem" and options.Keybind or nil
+		local keybind = attachKeybind(self, item, {
+			Key = key, Mode = "Toggle", Name = options.KeybindName or options.Name, Gear = true,
+			OnPress = function() fire(object.Callback) end,
+		})
+		keybind.Tappable = true
+		keybind.OnKeyChanged = function() win:SetHotkeyActive(keybind, TouchOnly) end
+		object.Keybind = keybind
+	end
+
+	local flag = register(self, object, options, item)
+	if flag and object.Keybind then win.Flags[flag .. "/Key"] = object.Keybind end
 	return object
 end
 
@@ -2184,6 +2207,17 @@ function Window:SetHotkeyActive(object, active)
 			end
 			hit.MouseButton1Click:Connect(function() owner:Set(not owner.Value) end)
 			entry.Render(false)
+		elseif TouchOnly and object.Tappable then
+			local pill = new("Frame", {
+				Bg = "Accent", AnchorPoint = Vec2(1, 0.5), Position = Dim2(1, -9, 0.5, 0),
+				Size = Offset(20, 10), Radius = FULL, Border = "Outline",
+			}, frame)
+			local hit = new("TextButton", { Size = Dim2(1, 0, 1, 0), ZIndex = 2 }, frame)
+			hit.MouseButton1Click:Connect(function()
+				snap(pill, "Size", Offset(10, 6))
+				animate(pill, "Size", Offset(20, 10), "Knob")
+				if object.OnPress then object.OnPress() end
+			end)
 		end
 		frame.Position = Offset(-14, 33 * #self.HotkeyOrder + 1)
 		entry.Fader:Show()
