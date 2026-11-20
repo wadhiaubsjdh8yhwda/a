@@ -3451,12 +3451,22 @@ end
 
 function Window:_buildHotkeys()
 	local holder = new("Frame", { Size = Offset(200, 300) }, self.Screen)
-	local head = new("Frame", { Bg = "Background", Position = Offset(1, 1), Size = Offset(88, 25), Radius = Metrics.FloatRadius, Border = "Outline", Active = true }, holder)
-	makeIcon(head, "key", 14, "Accent", "Background", { Position = Offset(9, 5) })
-	local text = label(head, { Text = "Hotkeys", TextSize = 12, Weight = Enum.FontWeight.SemiBold, X = 31, RowH = 25 })
-	local function fit() head.Size = Offset(math.ceil(text.TextBounds.X) + 41, 25) end
-	text:GetPropertyChangedSignal("TextBounds"):Connect(fit)
-	fit()
+	local head = new("Frame", {
+		Bg = "Background", Position = Offset(1, 1), Size = Offset(0, 25), AutomaticSize = Enum.AutomaticSize.X,
+		Radius = Metrics.FloatRadius, Border = "Outline", Active = true,
+	}, holder)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, head)
+	new("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal, VerticalAlignment = Enum.VerticalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 8),
+	}, head)
+	local icon = makeIcon(head, "key", 14, "Accent", "Background")
+	icon.Root.LayoutOrder = 1
+	new("TextLabel", {
+		Fg = "Text", Text = "Hotkeys", TextSize = 12, Weight = Enum.FontWeight.SemiBold,
+		Size = Offset(0, 25), AutomaticSize = Enum.AutomaticSize.X, TextYAlignment = Enum.TextYAlignment.Center,
+		LayoutOrder = 2,
+	}, head)
 	self.Hotkeys = holder
 	self:_makeDraggable(head, holder)
 end
