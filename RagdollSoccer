@@ -23,9 +23,8 @@ if getgenv().MystrixHub then
     task.wait(0.2)
 end
 
-local CURRENT_VERSION = "v1.1.6"
+local CURRENT_VERSION = "v1.1.7"
 local DISCORD_INVITE = "46JkThWjPB"
-local HUB_LOGO = "rbxassetid://85997568026025"
 
 local Services = setmetatable({}, {
     __index = function(self, Index)
@@ -79,6 +78,7 @@ end
 getgenv().MystrixSilentAim = getgenv().MystrixSilentAim or { Enabled = false, Hooked = false }
 getgenv().MystrixMaxPower = getgenv().MystrixMaxPower or { Enabled = false, Hooked = false }
 local SilentAimState = getgenv().MystrixSilentAim
+if SilentAimState.OnlyGoalShots == nil then SilentAimState.OnlyGoalShots = true end
 local MaxPowerState = getgenv().MystrixMaxPower
 
 function MystrixHub.Functions.InstallMaxPower()
@@ -423,23 +423,22 @@ function MystrixHub.Functions.FindPokeTarget()
     local char = LocalPlayer.Character
     local root = char and char:FindFirstChild("Root")
     if not root then return nil end
-    local ball = Services.CollectionService:GetTagged("SoccerBall")[1]
+    local ball = MystrixHub.Functions.GetBall()
     if not ball then return nil end
     local possessor = ball:GetAttribute("Possessor")
-    if type(possessor) ~= "number" or possessor == 0 then return nil end
-    local myId = char:GetAttribute("DribbleId")
-    if possessor == myId then return nil end
+    local ownId = char:GetAttribute("DribbleId")
+    if type(possessor) ~= "number" or possessor == 0 or possessor == ownId then return nil end
     local myTeam = char:GetAttribute("Team")
     for _, model in ipairs(Services.CollectionService:GetTagged("MannequinCharacter")) do
         if model ~= char and model:IsA("Model") and model:GetAttribute("DribbleId") == possessor then
             local team = model:GetAttribute("Team")
             if myTeam ~= nil and team == myTeam then return nil end
-            local theirRoot = model:FindFirstChild("Root")
-            if theirRoot and theirRoot:IsA("BasePart") then
-                local delta = theirRoot.Position - root.Position
-                local flat = Vector3.new(delta.X, 0, delta.Z).Magnitude
-                return model, flat
-            end
+            local otherRoot = model:FindFirstChild("Root")
+            if not (otherRoot and otherRoot:IsA("BasePart")) then return nil end
+            local bodyState = model:GetAttribute("BodyState")
+            if bodyState ~= nil and bodyState ~= "Animated" then return nil end
+            local diff = otherRoot.Position - root.Position
+            return model, Vector3.new(diff.X, 0, diff.Z).Magnitude
         end
     end
     return nil
@@ -473,6 +472,34 @@ function MystrixHub.Functions.ReleaseAllBindings()
     if F then F.Until = 0 end
 end
 
+function MystrixHub.Functions.PokeOpportunity(target, range)
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("Root")
+    local cm = char and char:FindFirstChildOfClass("ControllerManager")
+    if not (root and cm and target) then return false end
+    local gc = cm:FindFirstChild("GroundController")
+    if not gc or cm.ActiveController ~= gc then return false end
+    local ball = MystrixHub.Functions.GetBall()
+    if not ball or ball:GetAttribute("Possessor") ~= target:GetAttribute("DribbleId") then return false end
+    local bp, bv = ball.Position, ball.AssemblyLinearVelocity
+    local view = MystrixHub.Functions.ClientModule("BallView")
+    if view and type(view.freeState) == "function" then
+        local ok, pos, vel = pcall(view.freeState)
+        if ok and typeof(pos) == "Vector3" and typeof(vel) == "Vector3" then
+            bp, bv = pos, vel
+        end
+    end
+    local aim = bp + Vector3.new(bv.X, 0, bv.Z) * 0.14 - root.Position
+    local flat = Vector3.new(aim.X, 0, aim.Z)
+    local dist = flat.Magnitude
+    if dist < 0.8 or dist > math.min(range, 7.2) then return false end
+    local look = root.CFrame.LookVector
+    local face = Vector3.new(look.X, 0, look.Z)
+    if face.Magnitude < 0.01 or face.Unit:Dot(flat.Unit) < -0.05 then return false end
+    if math.abs(bp.Y - root.Position.Y) > 5 then return false end
+    return true
+end
+
 function MystrixHub.Functions.StopAutoPoke()
     local state = MystrixHub.AutoPoke
     MystrixHub.AutoPoke = nil
@@ -488,27 +515,41 @@ function MystrixHub.Functions.StopAutoPoke()
 end
 
 function MystrixHub.Functions.StartAutoPoke()
-    MystrixHub.Functions.StopAutoPoke()
-    local state = { Acc = 0 }
-    MystrixHub.AutoPoke = state
-    state.Conn = RunService.Heartbeat:Connect(function(dt)
-        state.Acc += dt
-        if state.Acc < 0.2 then return end
-        state.Acc = 0
+    local F = MystrixHub.Functions
+    F.StopAutoPoke()
+    local st = { Acc = 0, Next = 0, Target = nil, Seen = 0 }
+    MystrixHub.AutoPoke = st
+    st.Conn = RunService.Heartbeat:Connect(function(dt)
+        st.Acc += dt
+        if st.Acc < 0.075 then return end
+        st.Acc = 0
         local cfg = getgenv().MystrixAutoPoke
         if not cfg.Enabled then return end
+        local now = os.clock()
+        if now < st.Next then return end
         local char = LocalPlayer.Character
-        if not char then return end
+        if not char or F.MatchPaused(char) then return end
         local bodyState = char:GetAttribute("BodyState")
         if bodyState ~= nil and bodyState ~= "Animated" then return end
+        if MystrixHub.TrickActive or now < (MystrixHub.ShotNext or 0) then return end
         local readyAt = LocalPlayer:GetAttribute("PokeReadyAt")
-        if type(readyAt) == "number" and readyAt > workspace:GetServerTimeNow() then return end
-        local target, distance = MystrixHub.Functions.FindPokeTarget()
-        if target and distance <= cfg.Range then
-            MystrixHub.Functions.FirePoke()
+        if type(readyAt) == "number" and readyAt > workspace:GetServerTimeNow() + 0.03 then return end
+        local target, distance = F.FindPokeTarget()
+        if not target or not distance or distance > math.min(cfg.Range + 1, 9) then
+            st.Target, st.Seen = nil, 0
+            return
         end
+        if st.Target ~= target then
+            st.Target, st.Seen = target, now
+            return
+        end
+        if now - st.Seen < 0.09 or not F.PokeOpportunity(target, cfg.Range) then return end
+        local ok, fired = pcall(F.FirePoke)
+        st.Next = now + ((ok and fired) and 0.75 or 0.25)
+        if ok and fired then st.Seen = now + 0.3 end
     end)
-    MystrixHub.ConnectionController.Insert(state.Conn)
+    MystrixHub.ConnectionController.Insert(st.Conn)
+    return true
 end
 
 getgenv().MystrixSprint = getgenv().MystrixSprint or { Infinite = false, Auto = false }
@@ -1077,6 +1118,7 @@ getgenv().MystrixAutoDribble = getgenv().MystrixAutoDribble or { Enabled = false
 function MystrixHub.Functions.StopAutoDribble()
     local st = MystrixHub.AutoDribble
     MystrixHub.AutoDribble = nil
+    pcall(function() RunService:UnbindFromRenderStep("MystrixDribbleEvade") end)
     if st and st.Conn then
         pcall(function() st.Conn:Disconnect() end)
     end
@@ -1085,21 +1127,17 @@ end
 function MystrixHub.Functions.AutoDribbleTick(st, now)
     local F = MystrixHub.Functions
     local cfg = getgenv().MystrixAutoDribble
+    st.Threats = nil
     local char = LocalPlayer.Character
-    if not char then return end
+    if not char or F.MatchPaused(char) then return end
     local ball = F.GetBall()
-    if not ball then return end
     local id = char:GetAttribute("DribbleId")
-    if type(id) ~= "number" or ball:GetAttribute("Possessor") ~= id then return end
-    if F.MatchPaused(char) then return end
+    if not ball or type(id) ~= "number" or ball:GetAttribute("Possessor") ~= id then return end
     local bodyState = char:GetAttribute("BodyState")
     if bodyState ~= nil and bodyState ~= "Animated" then return end
     if MystrixHub.TrickActive or now < (MystrixHub.ShotNext or 0) then return end
     local root = char:FindFirstChild("Root")
     if not root then return end
-    local play = F.SkillModule()
-    if not play then return end
-    if type(play.busy) == "function" and play.busy() then return end
     local rp = root.Position
     local shoot = getgenv().MystrixAutoShoot
     if shoot.Enabled then
@@ -1110,119 +1148,36 @@ function MystrixHub.Functions.AutoDribbleTick(st, now)
             if gx * gx + gz * gz <= limit * limit then return end
         end
     end
-    local rv = root.AssemblyLinearVelocity
-    local vx, vz = rv.X, rv.Z
-    local speed = math.sqrt(vx * vx + vz * vz)
-    local fx, fz
-    if speed > 3 then
-        fx, fz = vx / speed, vz / speed
-    else
-        local look = root.CFrame.LookVector
-        local m = math.sqrt(look.X * look.X + look.Z * look.Z)
-        if m < 0.001 then return end
-        fx, fz = look.X / m, look.Z / m
+    local v = root.AssemblyLinearVelocity
+    local myVel = Vector3.new(v.X, 0, v.Z)
+    local speed = myVel.Magnitude
+    local facing = speed > 4 and myVel / speed or root.CFrame.LookVector
+    local f = Vector3.new(facing.X, 0, facing.Z)
+    if f.Magnitude < 0.01 then return end
+    f = f.Unit
+    local threats = F.DribbleThreats(char, rp, f, myVel, cfg.Range + 4)
+    st.Threats = threats
+    st.ThreatAt = os.clock()
+    st.Char = char
+    if now - (st.SkillAt or 0) > 2 then st.Combo = 0 end
+    local p = threats[1]
+    if not p then return end
+    if now < st.Next then return end
+    local urgent = p.ttc <= 0.6 or p.d <= 7
+    if not urgent then return end
+    if not p.ready and p.d > 3.5 then return end
+    if p.ahead < -0.15 and p.d > 5 then return end
+    local crowd = 0
+    for _, t in ipairs(threats) do
+        if t.d <= 14 then crowd += 1 end
     end
-    local team = char:GetAttribute("Team")
-    local range = cfg.Range
-    local nearD, nearAhead = math.huge, 0
-    local awayX, awayZ = 0, 0
-    local threats = 0
-    for _, model in ipairs(Services.CollectionService:GetTagged("MannequinCharacter")) do
-        if model ~= char then
-            local other = model:GetAttribute("Team")
-            if type(other) == "string" and other ~= team and model:GetAttribute("AIGoalie") == nil then
-                local state = model:GetAttribute("BodyState")
-                local r = model:FindFirstChild("Root")
-                if r and (state == nil or state == "Animated") then
-                    local p = r.Position
-                    local dx, dz = p.X - rp.X, p.Z - rp.Z
-                    local d2 = dx * dx + dz * dz
-                    if d2 <= range * range and d2 > 0.25 then
-                        local d = math.sqrt(d2)
-                        local ux, uz = dx / d, dz / d
-                        local ahead = fx * ux + fz * uz
-                        if ahead > -0.2 then
-                            local ov = r.AssemblyLinearVelocity
-                            local closing = (vx - ov.X) * ux + (vz - ov.Z) * uz
-                            if d <= 8 or (d - 3) / math.max(closing, 4) <= 0.45 then
-                                threats += 1
-                                local w = 1 / d
-                                awayX -= ux * w
-                                awayZ -= uz * w
-                                if d < nearD then
-                                    nearD, nearAhead = d, ahead
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-    if threats == 0 then return end
-    local cross = fx * awayZ - fz * awayX
-    local awayRight
-    if math.abs(cross) < 0.05 then
-        awayRight = st.Flip
-        st.Flip = not st.Flip
-    else
-        awayRight = cross > 0
-    end
-    local away = awayRight and "Right" or "Left"
-    local frontal = nearAhead > 0.75
-    local cands, n = {}, 0
-
-    local function add(w, kind, dir, half)
-        n += 1
-        cands[n] = { w = w, kind = kind, dir = dir, half = half }
-    end
-
-    if speed < 9 then
-        add(5, "Flick", away)
-        add(3, "Elastico", away)
-    else
-        if frontal and nearD < 7.5 and speed > 14 then
-            add(3, "Rainbow", "Up")
-        end
-        if frontal then
-            add(4, "Elastico", away)
-            add(3, "Roll", away, "Bottom")
-            add(3, "Roll", away, "Top")
-            add(3, "Flick", away)
-        else
-            add(5, "Flick", away)
-            add(3, "Roll", away, "Bottom")
-            add(3, "Elastico", away)
-            if nearD < 6 and speed < 20 then
-                add(2, "Flick", "Down")
-            end
-        end
-    end
-    local total = 0
-    for i = 1, n do
-        local c = cands[i]
-        c.key = c.kind .. c.dir .. (c.half or "")
-        if c.key == st.Last then
-            c.w = 0
-        end
-        total += c.w
-    end
-    if total <= 0 then return end
-    local pick
-    local roll = math.random() * total
-    for i = 1, n do
-        local c = cands[i]
-        if c.w > 0 then
-            pick = c
-            roll -= c.w
-            if roll <= 0 then break end
-        end
-    end
-    local ok, label = pcall(play.request, { kind = pick.kind, dir = pick.dir, half = pick.half }, speed)
-    if ok and label then
-        st.Last = pick.key
-        st.Next = now + 0.75 + math.random() * 0.45
-        F.Debug("dribble " .. tostring(label))
+    local gesture = F.DribblePick(speed, p, threats, crowd, st.Last)
+    local rainbow = gesture and gesture.kind == "Rainbow"
+    local success = F.TrySkill(st, gesture, speed, now, rainbow and 1.1 or 0.7)
+    if success then
+        st.Combo = math.min((st.Combo or 0) + 1, 3)
+        st.SkillAt = now
+        st.Next = now + (rainbow and 1.2 or (0.6 + 0.08 * st.Combo))
     else
         st.Next = now + 0.12
     end
@@ -1231,20 +1186,73 @@ end
 function MystrixHub.Functions.StartAutoDribble()
     local F = MystrixHub.Functions
     F.StopAutoDribble()
-    local st = { Acc = 0, Next = 0, Flip = math.random() < 0.5 }
+    local cfg = getgenv().MystrixAutoDribble
+    if cfg.Evade == nil then cfg.Evade = true end
+    if cfg.EvadeStrength == nil then cfg.EvadeStrength = 0.8 end
+    local st = { Acc = 0, Next = 0, Combo = 0 }
     MystrixHub.AutoDribble = st
     st.Conn = RunService.Heartbeat:Connect(function(dt)
         st.Acc += dt
         if st.Acc < 0.05 then return end
         st.Acc = 0
-        if not getgenv().MystrixAutoDribble.Enabled then return end
+        if not getgenv().MystrixAutoDribble.Enabled then
+            st.Threats = nil
+            return
+        end
         local now = os.clock()
-        if now < st.Next then return end
-        if not pcall(F.AutoDribbleTick, st, now) then
-            st.Next = now + 1
+        local ok = pcall(F.AutoDribbleTick, st, now)
+        if not ok then
+            st.Threats = nil
+            st.Next = now + 0.5
         end
     end)
+    RunService:BindToRenderStep("MystrixDribbleEvade", Enum.RenderPriority.Input.Value + 7, function()
+        local c = getgenv().MystrixAutoDribble
+        if not (c.Enabled and c.Evade) then return end
+        local threats = st.Threats
+        local now = os.clock()
+        if not threats or #threats == 0 or now - (st.ThreatAt or 0) > 0.25 then return end
+        local char = LocalPlayer.Character
+        if not char or char ~= st.Char then return end
+        if MystrixHub.TrickActive or now < (MystrixHub.SkillUntil or 0) or now < (MystrixHub.ShotNext or 0) then return end
+        local cm = char:FindFirstChildOfClass("ControllerManager")
+        if not cm then return end
+        local md = cm.MovingDirection
+        local flat = Vector3.new(md.X, 0, md.Z)
+        local mag = flat.Magnitude
+        if mag < 0.1 then return end
+        local desired = flat / mag
+        local left = Vector3.new(desired.Z, 0, -desired.X)
+        local range = c.Range + 2
+        local vote, strongest = 0, 0
+        for i = 1, math.min(#threats, 3) do
+            local t = threats[i]
+            if t.ahead > 0.1 and t.d < range then
+                local w = 1 - t.d / range
+                if not t.ready then w *= 0.5 end
+                local s = desired.X * t.dir.Z - desired.Z * t.dir.X
+                vote += (s >= 0 and 1 or -1) * w
+                strongest = math.max(strongest, w * t.ahead)
+            end
+        end
+        if strongest <= 0 then return end
+        local want = vote >= 0 and 1 or -1
+        local sign = want
+        if st.LatSign and want ~= st.LatSign and now - (st.LatAt or 0) < 0.5 then
+            sign = st.LatSign
+        else
+            st.LatSign = want
+            st.LatAt = now
+        end
+        local strength = math.clamp(strongest * 1.6 * (c.EvadeStrength or 0.8), 0, 1.2)
+        local out = desired + left * sign * strength
+        if out.Magnitude < 0.001 then return end
+        cm.MovingDirection = out.Unit * mag
+    end)
     MystrixHub.ConnectionController.Insert(st.Conn)
+    MystrixHub.ConnectionController.Insert({ Disconnect = function()
+        MystrixHub.Functions.StopAutoDribble()
+    end })
     return true
 end
 
@@ -1625,7 +1633,7 @@ function MystrixHub.Functions.StartGuard()
 end
 
 getgenv().MystrixKeeper = getgenv().MystrixKeeper or {}
-for k, v in pairs({ Enabled = false, Depth = 4.5, DiveRange = 14, Poke = true, Dive = true, Gather = true, Rush = true, RushRange = 34, DiveLead = 0.06, StandReach = 2 }) do
+for k, v in pairs({ Enabled = false, Depth = 4.5, DiveRange = 22, Poke = true, Dive = true, Gather = true, Rush = true, RushRange = 34, DiveLead = 0.0, DiveBias = 0.0, CommitRange = 45, StandReach = 2 }) do
     if getgenv().MystrixKeeper[k] == nil then
         getgenv().MystrixKeeper[k] = v
     end
@@ -1778,27 +1786,6 @@ end
 
 task.spawn(MystrixHub.Functions.KeeperDiveEnv)
 
-function MystrixHub.Functions.KeeperDive(char, kind, lateral)
-    local F = MystrixHub.Functions
-    local mod = F.MannequinClientModule()
-    if not mod then return false end
-    if char:GetAttribute("BodyState") ~= "Animated" then return false end
-    if mod.keeperReady and not mod.keeperReady() then return false end
-    if mod.keeperDiveTo then
-        local ok, res = pcall(mod.keeperDiveTo, F.KeeperDiveStick(kind, lateral), false)
-        if ok and res then
-            F.Debug("dive " .. kind .. " via keeperDiveTo")
-            return true
-        end
-    end
-    local ok, res = pcall(F.KeeperDiveDirect, char, kind, lateral)
-    if ok and res then
-        F.Debug("dive " .. kind .. " direct")
-        return true
-    end
-    return false
-end
-
 function MystrixHub.Functions.KeeperIntercept(plan, x)
     local path = plan.path
     if not path then return nil end
@@ -1815,9 +1802,160 @@ function MystrixHub.Functions.KeeperIntercept(plan, x)
     return nil
 end
 
+function MystrixHub.Functions.StopKeeper()
+    pcall(function() RunService:UnbindFromRenderStep("MystrixKeeper") end)
+    local st = MystrixHub.KeeperState
+    MystrixHub.KeeperState = nil
+    if st and st.Controlling and st.Cm and st.Cm.Parent then
+        pcall(function() st.Cm.MovingDirection = Vector3.zero end)
+    end
+end
+
+for k, v in pairs({ Lead = 0.03, ArmReach = 3.4, MinShotSpeed = 20 }) do
+    if getgenv().MystrixKeeper[k] == nil then
+        getgenv().MystrixKeeper[k] = v
+    end
+end
+
+function MystrixHub.Functions.KeeperDiveDirect(char, kind, lateral)
+    local F = MystrixHub.Functions
+    if kind == "Jump" then return false end
+    local env = F.KeeperDiveEnv()
+    local mod = F.MannequinClientModule()
+    local goal = F.KeeperGoal()
+    if not (env and mod and goal) then return false end
+    local okA, anim = pcall(mod.getAnimator, char)
+    if not okA or not anim then return false end
+    local body = anim.body or (anim.getBody and anim:getBody())
+    if not body or body.active then return false end
+    local dir = Vector3.new(0, 0, lateral.Z >= 0 and 1 or -1)
+    local ok, started = pcall(body.keyDive, body, kind, dir, goal.inward)
+    if not (ok and started) then return false end
+    local kdive = body.kdive
+    local payload = nil
+    if kdive and kdive.animated then
+        local eok, encoded = pcall(env.Dives.encode, kdive.move)
+        if eok then payload = encoded end
+    end
+    env.Remote:FireServer("Dive" .. kind, dir, payload)
+    return true
+end
+
+function MystrixHub.Functions.KeeperDive(char, kind, lateral)
+    local F = MystrixHub.Functions
+    local mod = F.MannequinClientModule()
+    if not mod then return false end
+    if char:GetAttribute("BodyState") ~= "Animated" then return false end
+    if mod.keeperReady and not mod.keeperReady() then return false end
+    if kind == "Jump" then
+        if not mod.keeperJump then return false end
+        return pcall(mod.keeperJump)
+    end
+    local ok, res = pcall(F.KeeperDiveDirect, char, kind, lateral)
+    return ok and res == true
+end
+
+function MystrixHub.Functions.KeeperDiveProfile(kind)
+    local H = MystrixHub
+    local cache = H.KeeperProfiles
+    if not cache then
+        cache = {}
+        H.KeeperProfiles = cache
+    end
+    if cache[kind] ~= nil then return cache[kind] or nil end
+    local mod = H.Functions.KeeperDivesModule()
+    if not (mod and type(mod.track) == "function" and type(mod.hips) == "function") then return nil end
+    local ok, tr = pcall(mod.track, kind)
+    if not ok or type(tr) ~= "table" or not tr.right then
+        cache[kind] = false
+        return nil
+    end
+    local limit = tr.ragAt or tr.touch or tr.duration
+    local step = 0.02
+    local n = math.max(math.floor(math.min(limit, tr.duration) / step), 2)
+    local okB, base = pcall(mod.hips, tr.right, 0)
+    if not okB then
+        cache[kind] = false
+        return nil
+    end
+    local D = {}
+    for i = 0, n do
+        local okP, p = pcall(mod.hips, tr.right, i * step)
+        if not okP then
+            cache[kind] = false
+            return nil
+        end
+        D[i + 1] = math.abs(p.X - base.X)
+    end
+    local prof = { step = step, D = D, tmax = n * step, takeoff = tr.takeoff, touch = tr.touch }
+    cache[kind] = prof
+    return prof
+end
+
+function MystrixHub.Functions.KeeperDiveTime(prof, alat, carry)
+    local arm = getgenv().MystrixKeeper.ArmReach
+    local ct = math.max(prof.takeoff or 0.15, 0.15)
+    for i = 1, #prof.D do
+        local t = (i - 1) * prof.step
+        local c = math.min(t, ct)
+        local disp = prof.D[i] + carry * (c - c * c / (2 * ct)) + arm
+        if disp >= alat then return t end
+    end
+    return nil
+end
+
+function MystrixHub.Functions.KeeperDecide(plan, root, now)
+    local F = MystrixHub.Functions
+    local cfg = getgenv().MystrixKeeper
+    local rp = root.Position
+    local hit = F.KeeperIntercept(plan, rp.X)
+    if not hit then return nil end
+    local rem = plan.at + hit.t - now
+    if rem < -0.06 or (plan.speed or 0) < cfg.MinShotSpeed then return nil end
+    local lat = hit.pos.Z - rp.Z
+    local alat = math.abs(lat)
+    local hy = hit.pos.Y - plan.goal.ground
+    local runSpeed = F.SprintBase() * math.max(getgenv().MystrixSprint.Boost or 1, 1)
+    local reach = 3.2 + runSpeed * 0.8 * math.max(rem - 0.12, 0)
+    if hy >= 5.8 and alat <= 3.6 then
+        return "Jump", rem, 0.35 + cfg.Lead, lat
+    end
+    if alat <= reach then return nil end
+    if alat > cfg.DiveRange * 1.1 then return nil end
+    local order
+    if hy >= 4.9 then
+        order = { "High", "Mid", "Low" }
+    elseif hy <= 3.2 then
+        order = { "Low", "Mid", "High" }
+    else
+        order = { "Mid", "High", "Low" }
+    end
+    local sign = lat >= 0 and 1 or -1
+    local carry = math.clamp(root.AssemblyLinearVelocity.Z * sign, -24, 24)
+    local chosen, tau
+    for _, kind in ipairs(order) do
+        local prof = F.KeeperDiveProfile(kind)
+        if prof then
+            local t = F.KeeperDiveTime(prof, alat, carry)
+            if t then
+                chosen, tau = kind, t
+                break
+            end
+        end
+    end
+    if not chosen then
+        chosen = order[1]
+        local prof = F.KeeperDiveProfile(chosen)
+        tau = prof and prof.tmax or F.KeeperDiveTouch(chosen)
+    end
+    local lag = math.clamp(plan.lag or 0, 0, 0.25)
+    return chosen, rem, tau + cfg.Lead + lag * 0.4, lat
+end
+
 function MystrixHub.Functions.KeeperPlan(char, root, ball, goal)
     local F = MystrixHub.Functions
     local cfg = getgenv().MystrixKeeper
+    local st = MystrixHub.KeeperState
     local id = char:GetAttribute("DribbleId")
     local myTeam = char:GetAttribute("Team")
     local possessor = ball:GetAttribute("Possessor")
@@ -1827,6 +1965,7 @@ function MystrixHub.Functions.KeeperPlan(char, root, ball, goal)
     local inward = goal.inward
     local near = cfg.Depth
     local limit = goal.half - 2.5
+    local now = os.clock()
 
     local function spotFor(point)
         local dx, dz = point.X - goal.x, point.Z - gz
@@ -1840,8 +1979,8 @@ function MystrixHub.Functions.KeeperPlan(char, root, ball, goal)
             uz = (uz >= 0 and 1 or -1) * 0.9367496997597597
             along = 0.35
         end
-        local t = math.clamp((dist - 30) / 130, 0, 1)
-        local depth = near + near * t
+        local t = math.clamp((dist - 14) / 90, 0, 1)
+        local depth = near + near * 1.2 * t
         local z = math.clamp(uz * depth / along, -limit, limit)
         return Vector3.new(goal.x + inward.X * depth, rp.Y, gz + z)
     end
@@ -1854,7 +1993,7 @@ function MystrixHub.Functions.KeeperPlan(char, root, ball, goal)
         end
         local cp = croot.Position
         local cv = croot.AssemblyLinearVelocity
-        local ahead = Vector3.new(cp.X + cv.X * 0.2, cp.Y, cp.Z + cv.Z * 0.2)
+        local ahead = Vector3.new(cp.X + cv.X * 0.25, cp.Y, cp.Z + cv.Z * 0.25)
         local plan = { kind = "hold", target = spotFor(ahead), look = cp }
         if model:GetAttribute("Team") == myTeam then
             return plan
@@ -1864,7 +2003,13 @@ function MystrixHub.Functions.KeeperPlan(char, root, ball, goal)
         local mx, mz = cp.X - rp.X, cp.Z - rp.Z
         local toMe = math.sqrt(mx * mx + mz * mz)
         plan.carrier = croot
-        if cfg.Rush and toGoal <= cfg.RushRange and toMe <= 24 and inward.X * gx > 0 then
+        local inFront = inward.X * gx > 0
+        local central = math.abs(gdz) <= goal.half * 1.25
+        local towards = -(cv.X * inward.X)
+        local holding = st and st.RushUntil and now < st.RushUntil
+        local want = cfg.Rush and inFront and central and toGoal <= cfg.RushRange and toGoal >= 9 and toMe <= 26 and towards > -2
+        if want or (holding and inFront and toGoal >= 7 and toMe <= 30) then
+            if want and st then st.RushUntil = now + 0.5 end
             local lead = math.min(toMe / math.max(F.SprintBase(), 1), 0.4)
             plan.kind = "rush"
             plan.target = Vector3.new(cp.X + cv.X * lead, rp.Y, cp.Z + cv.Z * lead)
@@ -1891,7 +2036,7 @@ function MystrixHub.Functions.KeeperPlan(char, root, ball, goal)
     if vel.Magnitude > 12 then
         local params = SA.Flight.params(ball)
         local gy = BV.groundBallY(pos)
-        local list = F.ShotPredict(params, pos, vel, spin or Vector3.zero, gy, 2.6, 1 / 45)
+        local list = F.ShotPredict(params, pos, vel, spin or Vector3.zero, gy, 2.2, 1 / 40)
         local side, lineX = goal.side, goal.x
         local prev, prevT = pos, 0
         local cross
@@ -1907,7 +2052,7 @@ function MystrixHub.Functions.KeeperPlan(char, root, ball, goal)
         if cross then
             local lat = math.abs(cross.pos.Z - gz)
             local hy = cross.pos.Y - goal.ground
-            if lat <= goal.half + 1.2 and hy <= (goal.top - goal.ground) + 1.2 and hy >= -0.5 then
+            if lat <= goal.half + 1.0 and hy <= (goal.top - goal.ground) + 1.0 and hy >= -0.5 then
                 local lag = 0
                 pcall(function() lag = LocalPlayer:GetNetworkPing() end)
                 lag = math.clamp(lag, 0, 0.25)
@@ -1916,18 +2061,18 @@ function MystrixHub.Functions.KeeperPlan(char, root, ball, goal)
                     look = pos,
                     path = list,
                     from = pos,
-                    at = os.clock(),
+                    at = now,
                     side = side,
                     lag = lag,
                     cross = cross,
                     goal = goal,
+                    speed = vel.Magnitude,
                 }
                 local depth = math.clamp((rp.X - goal.x) * inward.X, 2, 6)
                 local tx = goal.x + inward.X * depth
                 local hit = F.KeeperIntercept(plan, tx) or cross
                 local tz = math.clamp(hit.pos.Z, gz - (goal.half - 1), gz + (goal.half - 1))
                 plan.target = Vector3.new(tx, rp.Y, tz)
-                plan.T = plan.at + hit.t - lag
                 return plan
             end
         end
@@ -1965,15 +2110,6 @@ function MystrixHub.Functions.KeeperPlan(char, root, ball, goal)
     return { kind = "hold", target = spotFor(pos), look = pos }
 end
 
-function MystrixHub.Functions.StopKeeper()
-    pcall(function() RunService:UnbindFromRenderStep("MystrixKeeper") end)
-    local st = MystrixHub.KeeperState
-    MystrixHub.KeeperState = nil
-    if st and st.Controlling and st.Cm and st.Cm.Parent then
-        pcall(function() st.Cm.MovingDirection = Vector3.zero end)
-    end
-end
-
 function MystrixHub.Functions.StartKeeper()
     local F = MystrixHub.Functions
     F.StopKeeper()
@@ -1981,7 +2117,18 @@ function MystrixHub.Functions.StartKeeper()
     F.KeeperDiveEnv()
     F.KeeperDivesModule()
     local cfg = getgenv().MystrixKeeper
-    local st = { Acc = 1, Plan = nil, Controlling = false, DiveNext = 0, PokeNext = 0, SlideNext = 0 }
+    local st = {
+        Acc = 1,
+        Plan = nil,
+        Controlling = false,
+        DiveNext = 0,
+        PokeNext = 0,
+        SlideNext = 0,
+        Moving = false,
+        Dir = Vector3.zero,
+        RushUntil = 0,
+        Fast = false,
+    }
     MystrixHub.KeeperState = st
 
     local function downed(char)
@@ -2001,6 +2148,10 @@ function MystrixHub.Functions.StartKeeper()
         end
         st.Controlling = false
         st.Plan = nil
+        st.Tgt = nil
+        st.Moving = false
+        st.Dir = Vector3.zero
+        st.Face = nil
     end
 
     local function refresh()
@@ -2017,10 +2168,38 @@ function MystrixHub.Functions.StartKeeper()
         local plan = F.KeeperPlan(char, root, ball, goal)
         if not plan then return false end
         st.Char, st.Root, st.Cm, st.Ball, st.Plan = char, root, cm, ball, plan
+        st.Fast = plan.kind == "save" or plan.kind == "rush"
         return true
     end
 
-    local function drive()
+    local function steer(target, dt)
+        local cur = st.Face
+        if not cur or cur.Magnitude < 0.001 then
+            local look = st.Root.CFrame.LookVector
+            cur = Vector3.new(look.X, 0, look.Z)
+            if cur.Magnitude < 0.001 then
+                st.Face = target
+                return target
+            end
+        end
+        cur = cur.Unit
+        local angle = math.acos(math.clamp(cur:Dot(target), -1, 1))
+        local step = 12 * dt
+        if angle ~= angle or angle <= step then
+            st.Face = target
+            return target
+        end
+        local rotated = CFrame.Angles(0, cur:Cross(target).Y >= 0 and step or -step, 0) * cur
+        rotated = Vector3.new(rotated.X, 0, rotated.Z)
+        if rotated.Magnitude < 0.001 then
+            st.Face = target
+            return target
+        end
+        st.Face = rotated.Unit
+        return st.Face
+    end
+
+    local function drive(dt)
         local plan, root, cm, char = st.Plan, st.Root, st.Cm, st.Char
         if not (root.Parent and cm.Parent and char.Parent and LocalPlayer.Character == char) or downed(char) then
             release()
@@ -2028,20 +2207,36 @@ function MystrixHub.Functions.StartKeeper()
         end
         local now = os.clock()
         local rp = root.Position
-        local target = plan.target
-        local dx, dz = target.X - rp.X, target.Z - rp.Z
-        local dist = math.sqrt(dx * dx + dz * dz)
+        local kind = plan.kind
         local speed = F.SprintBase() * math.max(getgenv().MystrixSprint.Boost or 1, 1)
         local active = cm.ActiveController
         if active == nil or active.Name == "BodyIdleController" then
             local gc = cm:FindFirstChild("GroundController")
             if gc then cm.ActiveController = gc end
         end
-        local mag = plan.kind ~= "hold" and 1 or math.clamp(dist / 2.2, 0, 1)
-        if dist > 0.45 then
-            cm.MovingDirection = Vector3.new(dx / dist, 0, dz / dist) * mag
+        local goalT = plan.target
+        local tau = kind == "save" and 0.04 or (kind == "rush" and 0.07 or 0.12)
+        if not st.Tgt or (st.Tgt - goalT).Magnitude > 25 then
+            st.Tgt = goalT
+        else
+            st.Tgt = st.Tgt:Lerp(goalT, 1 - math.exp(-dt / tau))
+        end
+        local tgt = st.Tgt
+        local dx, dz = tgt.X - rp.X, tgt.Z - rp.Z
+        local dist = math.sqrt(dx * dx + dz * dz)
+        if st.Moving then
+            if dist < 0.25 then st.Moving = false end
+        elseif dist > 0.6 then
+            st.Moving = true
+        end
+        if st.Moving and dist > 0.001 then
+            local mag = kind == "hold" and math.clamp(dist / (speed * 0.2), 0.15, 1) or 1
+            local want = Vector3.new(dx / dist, 0, dz / dist) * mag
+            st.Dir = st.Dir:Lerp(want, 1 - math.exp(-dt / 0.04))
+            cm.MovingDirection = st.Dir
             cm.BaseMoveSpeed = math.max(cm.BaseMoveSpeed, speed)
         else
+            st.Dir = Vector3.zero
             cm.MovingDirection = Vector3.zero
         end
         local look = plan.look
@@ -2049,7 +2244,7 @@ function MystrixHub.Functions.StartKeeper()
             local fx, fz = look.X - rp.X, look.Z - rp.Z
             local fm = math.sqrt(fx * fx + fz * fz)
             if fm > 1 then
-                cm.FacingDirection = Vector3.new(fx / fm, 0, fz / fm)
+                cm.FacingDirection = steer(Vector3.new(fx / fm, 0, fz / fm), dt)
             end
         end
         st.Controlling = true
@@ -2067,34 +2262,22 @@ function MystrixHub.Functions.StartKeeper()
             end
         end
 
-        if cfg.Dive and plan.kind == "save" and now >= st.DiveNext and char:GetAttribute("Role") == "Goalkeeper" then
-            local hit = F.KeeperIntercept(plan, rp.X)
-            if hit then
-                local rem = plan.at + hit.t - plan.lag - now
-                local lat = hit.pos.Z - rp.Z
-                local alat = math.abs(lat)
-                local hy = hit.pos.Y - plan.goal.ground
-                local kind
-                if alat <= cfg.StandReach then
-                    if hy >= 6.2 then kind = "Jump" end
-                elseif alat <= cfg.DiveRange then
-                    kind = hy >= 5.2 and "High" or (hy <= 2.4 and "Low" or "Mid")
-                end
-                if kind then
-                    local touch = kind == "Jump" and 0.3 or F.KeeperDiveTouch(kind)
-                    if rem > -0.12 and rem <= touch + cfg.DiveLead then
-                        local lateral = Vector3.new(0, 0, lat >= 0 and 1 or -1)
-                        if F.KeeperDive(char, kind, lateral) then
-                            st.DiveNext = now + (kind == "Jump" and 0.8 or 1.5)
-                        else
-                            st.DiveNext = now + 0.08
-                        end
+        if cfg.Dive and kind == "save" and now >= st.DiveNext and char:GetAttribute("Role") == "Goalkeeper" then
+            local ballFlat = Vector3.new(plan.from.X - rp.X, 0, plan.from.Z - rp.Z).Magnitude
+            if ballFlat <= (cfg.CommitRange or 45) then
+                local diveKind, rem, fireAt, lat = F.KeeperDecide(plan, root, now)
+                if diveKind and rem <= fireAt and rem >= -0.06 then
+                    local lateral = Vector3.new(0, 0, lat >= 0 and 1 or -1)
+                    if F.KeeperDive(char, diveKind, lateral) then
+                        st.DiveNext = now + (diveKind == "Jump" and 0.8 or 1.5)
+                    else
+                        st.DiveNext = now + 0.05
                     end
                 end
             end
         end
 
-        if cfg.Dive and plan.kind == "rush" and plan.carrier and plan.carrier.Parent and now >= st.SlideNext then
+        if cfg.Dive and kind == "rush" and plan.carrier and plan.carrier.Parent and now >= st.SlideNext then
             local cp = plan.carrier.Position
             local sx, sz = cp.X - rp.X, cp.Z - rp.Z
             local acts = F.KeeperActions()
@@ -2114,7 +2297,7 @@ function MystrixHub.Functions.StartKeeper()
             return
         end
         st.Acc += dt
-        if st.Acc >= 0.04 then
+        if st.Acc >= (st.Fast and 0.04 or 0.08) then
             st.Acc = 0
             local ok, ready = pcall(refresh)
             if not ok or not ready then
@@ -2123,7 +2306,7 @@ function MystrixHub.Functions.StartKeeper()
             end
         end
         if st.Plan then
-            if not pcall(drive) then
+            if not pcall(drive, dt) then
                 release()
             end
         end
@@ -2646,44 +2829,49 @@ function MystrixHub.Functions.AutoAir(st, T, char, root, ball, goal, goalDist, n
     local SA = getgenv().MystrixSilentAim
     if goalDist > T.Range then return end
     local bp, rp = ball.Position, root.Position
-    local bdx, bdz = bp.X - rp.X, bp.Z - rp.Z
-    if bdx * bdx + bdz * bdz > 8100 then return end
+    local delta = Vector3.new(bp.X - rp.X, 0, bp.Z - rp.Z)
+    if delta.Magnitude > 90 then return end
     local id = char:GetAttribute("DribbleId")
     if ball:GetAttribute("ReleasedBy") == id then
-        local releasedAt = ball:GetAttribute("ReleasedAt")
-        if type(releasedAt) == "number" and workspace:GetServerTimeNow() - releasedAt < 0.8 then return end
+        local at = ball:GetAttribute("ReleasedAt")
+        if type(at) == "number" and workspace:GetServerTimeNow() - at < 0.8 then return end
     end
     local pos, vel = SA.BallView.freeState()
-    if not pos then return end
+    if typeof(pos) ~= "Vector3" or typeof(vel) ~= "Vector3" then return end
     local gy = SA.BallView.groundBallY(pos)
-    if pos.Y - gy < 0.6 and math.abs(vel.Y) < 3 then return end
+    if pos.Y - gy < 0.9 and math.abs(vel.Y) < 3 then return end
     local best, bike, groundY, sampleNow, cands = F.TrickScanAir(st, root, goal)
     if not best then return end
     local cand, mode, family = F.TrickChoose(st, char, root, goal, best, bike, cands, groundY, sampleNow)
-    if not cand then return end
+    if not cand or not family then return end
     local result = F.ShotBest(cand.pos, family, false, F.Budget(0.006), -0.95)
     if not result or result.fallback then
-        F.Debug("no clear shot from the air spot")
-        st.Next = now + 0.3
+        st.Fail = st.Fail or {}
+        st.Fail[family] = now + 0.6
+        st.Next = now + 0.08
         return
     end
     local binding = F.TrickBinding("KickStrike")
     if not binding then
-        F.Debug("kick action not found")
+        st.Next = now + 0.5
         return
     end
     st.Point = result.point
     st.Phase = "air"
     st.Start = now
     st.Mode = mode
+    st.LockFamily = family
     st.Binding = binding
     st.Goal = goal
     st.Cand = { t = cand.t, at = now }
-    st.ScanAt = now + 0.1
+    st.ScanAt = now + 0.08
     st.Lost = 0
+    st.Seen = false
+    st.LastAir = family
     MystrixHub.TrickActive = true
-    MystrixHub.ShotNext = now + 4
-    F.ForceFor(3.5)
+    MystrixHub.ShotNext = now + 0.9
+    MystrixHub.TrickLock = { Name = family, Until = now + 1.6 }
+    F.ForceFor(2.2)
     F.TrickViewPush(st)
     binding:Fire(true)
     F.Debug("holding for " .. family)
@@ -2693,14 +2881,42 @@ function MystrixHub.Functions.AutoStep(st, now)
     local F = MystrixHub.Functions
     if st.Phase == "tail" then
         F.TrickViewPush(st)
-        if now >= st.TailUntil then
+        local started = F.TrickStarted()
+        if started then
+            st.Seen = true
+            MystrixHub.TrickLock = nil
+        end
+        local over
+        if st.Seen then
+            over = (not started and now - st.ReleaseAt > 0.3) or now >= st.ReleaseAt + 2.2
+        else
+            over = now >= st.TailUntil
+        end
+        if over then
+            if not st.Seen then
+                st.Fail = st.Fail or {}
+                if st.LockFamily then st.Fail[st.LockFamily] = now + 0.9 end
+                MystrixHub.ShotNext = now
+            end
             st.Phase = nil
+            st.LockFamily = nil
+            MystrixHub.TrickLock = nil
             MystrixHub.TrickActive = false
-            st.Next = now + 0.8
+            st.Next = now + (st.Seen and 0.5 or 0.12)
         end
         return
     end
-    local release = now - st.Start >= 1.7
+    local leads = {
+        Bicycle = 1.0,
+        DivingHeader = 0.95,
+        JumpHeader = 0.95,
+        RunningHeader = 0.85,
+        Header = 0.65,
+        Volley = 0.6,
+        SideVolley = 0.65,
+    }
+    local family = st.LockFamily
+    local release = false
     local char, root, ball, goal = F.TrickReady()
     if char then
         st.Goal = goal
@@ -2708,26 +2924,25 @@ function MystrixHub.Functions.AutoStep(st, now)
         if type(possessor) == "number" and possessor ~= 0 then
             release = true
         elseif now >= st.ScanAt then
-            st.ScanAt = now + 0.1
+            st.ScanAt = now + 0.08
             local best, bike, groundY, sampleNow, cands = F.TrickScanAir(st, root, goal)
-            local cand, mode, family
+            local cand
             if best then
-                cand, mode, family = F.TrickChoose(st, char, root, goal, best, bike, cands, groundY, sampleNow)
+                cand = F.TrickChoose(st, char, root, goal, best, bike, cands, groundY, sampleNow)
             end
             if cand then
                 st.Lost = 0
-                st.Mode = mode
                 st.Cand = { t = cand.t, at = now }
-                local result = F.ShotBest(cand.pos, family, false, F.Budget(0.004), -0.95)
-                if result then st.Point = result.point end
             else
                 st.Lost += 1
-                if st.Lost >= 3 then release = true end
+                if st.Lost >= 5 then release = true end
             end
         end
-        if st.Cand.t - (now - st.Cand.at) <= 0.55 then
-            release = true
-        end
+        local elapsed = now - st.Start
+        local remaining = st.Cand.t - (now - st.Cand.at)
+        local minHold = getgenv().MystrixMaxPower.Hooked and 0.08 or 0.3
+        if elapsed >= minHold and remaining <= (leads[family] or 0.7) then release = true end
+        if elapsed >= 1.3 then release = true end
     else
         release = true
     end
@@ -2735,8 +2950,13 @@ function MystrixHub.Functions.AutoStep(st, now)
     if release then
         pcall(function() st.Binding:Fire(false) end)
         st.Phase = "tail"
-        st.TailUntil = now + 0.5
-        MystrixHub.ShotNext = now + 1.2
+        st.ReleaseAt = now
+        st.TailUntil = now + 1.25
+        st.Seen = false
+        MystrixHub.ShotNext = now + 0.8
+        if MystrixHub.TrickLock then
+            MystrixHub.TrickLock.Until = now + 1.2
+        end
     end
 end
 
@@ -2769,7 +2989,7 @@ function MystrixHub.Functions.AutoTick(st)
         F.AutoPossessed(st, S, T, goal, goalDist, now)
     elseif T.Enabled then
         if now < st.ScanAt then return end
-        st.ScanAt = now + 0.2
+        st.ScanAt = now + 0.1
         F.AutoAir(st, T, char, root, ball, goal, goalDist, now)
     end
 end
@@ -2822,25 +3042,56 @@ function MystrixHub.Functions.SkillThreat(char, root, range)
     return best
 end
 
-function MystrixHub.Functions.SkillPick(speed, d, ahead, side)
+function MystrixHub.Functions.SkillPick(speed, d, ahead, side, last)
     local away = side > 0 and "Left" or "Right"
-    local r = math.random()
-    if speed < 10 then
-        return { kind = "Flick", dir = r < 0.5 and "Left" or "Right" }
+    local list = {}
+    local function add(kind, dir, half, weight)
+        local key = kind .. dir .. (half or "")
+        if key == last then weight *= 0.18 end
+        if weight > 0 then
+            list[#list + 1] = { kind = kind, dir = dir, half = half, weight = weight }
+        end
     end
-    if d < 7 and ahead > 0.6 and speed > 18 and r < 0.25 then
-        return { kind = "Rainbow", dir = "Up" }
+    if speed < 9 then
+        add("Flick", away, nil, 5)
+        add("Elastico", away, nil, 2)
+        if ahead > 0.45 then add("Hold", away, nil, 3) end
+    else
+        add("Elastico", away, nil, ahead > 0.5 and 6 or 4)
+        add("Roll", away, "Bottom", 5)
+        add("Roll", away, "Top", 4)
+        add("Flick", away, nil, ahead < 0.5 and 6 or 3)
+        if d < 7.5 and d > 3.2 and ahead > 0.62 and speed >= 14 and speed <= 36 then
+            add("Rainbow", "Up", nil, 7)
+        end
+        if speed < 22 and d < 6 then add("Flick", "Down", nil, 2) end
     end
-    if r < 0.28 then
-        return { kind = "Elastico", dir = away }
-    elseif r < 0.5 then
-        return { kind = "Roll", dir = away, half = "Bottom" }
-    elseif r < 0.68 then
-        return { kind = "Roll", dir = away, half = "Top" }
-    elseif r < 0.84 then
-        return { kind = "Flick", dir = away }
+    local sum = 0
+    for _, entry in ipairs(list) do sum += entry.weight end
+    if sum <= 0 then return nil end
+    local roll = math.random() * sum
+    for _, entry in ipairs(list) do
+        roll -= entry.weight
+        if roll <= 0 then return { kind = entry.kind, dir = entry.dir, half = entry.half } end
     end
-    return { kind = "Flick", dir = "Down" }
+    local e = list[#list]
+    return { kind = e.kind, dir = e.dir, half = e.half }
+end
+
+function MystrixHub.Functions.TrySkill(st, gesture, speed, now, cooldown)
+    if not gesture or now < (MystrixHub.SkillUntil or 0) then return false end
+    local play = MystrixHub.Functions.SkillModule()
+    if not play then return false end
+    if type(play.busy) == "function" then
+        local ok, busy = pcall(play.busy)
+        if not ok or busy then return false end
+    end
+    local ok, label = pcall(play.request, gesture, speed)
+    if not ok or not label then return false end
+    MystrixHub.SkillUntil = now + (cooldown or 0.75)
+    st.Last = gesture.kind .. gesture.dir .. (gesture.half or "")
+    MystrixHub.Functions.Debug("skill " .. tostring(label))
+    return true
 end
 
 function MystrixHub.Functions.AutoSkill(st, char, root, goalDist, now)
@@ -2848,33 +3099,37 @@ function MystrixHub.Functions.AutoSkill(st, char, root, goalDist, now)
     local T = getgenv().MystrixAutoTricks
     local forced = T.Auto == false
     if forced and #(T.Skills or {}) == 0 then return false end
-    if now < (st.SkillNext or 0) or goalDist < 22 then return false end
-    local threat = F.SkillThreat(char, root, T.Defender or 14)
-    if not threat then return false end
-    local play = F.SkillModule()
-    if not play then return false end
-    local busy = false
-    if type(play.busy) == "function" then
-        local ok, b = pcall(play.busy)
-        busy = ok and b == true
-    end
-    if busy then return false end
+    if now < (st.SkillNext or 0) or goalDist < 18 then return false end
+    if MystrixHub.AutoDribble and getgenv().MystrixAutoDribble.Enabled then return false end
     local vel = root.AssemblyLinearVelocity
-    local speed = math.sqrt(vel.X * vel.X + vel.Z * vel.Z)
+    local myVel = Vector3.new(vel.X, 0, vel.Z)
+    local speed = myVel.Magnitude
+    local look = root.CFrame.LookVector
+    local facing = speed > 4 and myVel / speed or Vector3.new(look.X, 0, look.Z)
+    if facing.Magnitude < 0.01 then return false end
+    local f = facing.Unit
+    local threats = F.DribbleThreats(char, root.Position, f, myVel, (T.Defender or 14) + 2)
+    local p = threats[1]
+    if not p then return false end
+    if p.ahead < -0.15 and p.d > 5 then return false end
+    if not (p.ttc <= 0.7 or p.d <= 8) then return false end
     local gesture
     if forced then
-        gesture = F.SkillForced(threat.side)
+        gesture = F.SkillForced(p.side)
     else
-        gesture = F.SkillPick(speed, threat.d, threat.ahead, threat.side)
+        local crowd = 0
+        for _, t in ipairs(threats) do
+            if t.d <= 14 then crowd += 1 end
+        end
+        gesture = F.DribblePick(speed, p, threats, crowd, st.Last, 2.8)
     end
-    local ok, label = pcall(play.request, gesture, speed)
-    if ok and label then
-        st.SkillNext = now + 1.1 + math.random() * 0.9
-        st.Next = now + 0.6
-        F.Debug("skill " .. tostring(label))
+    local rainbow = gesture and gesture.kind == "Rainbow"
+    local success = F.TrySkill(st, gesture, speed, now, rainbow and 1.1 or 0.8)
+    st.SkillNext = now + (success and (rainbow and 1.4 or 0.95) or 0.25)
+    if success then
+        st.Next = now + 0.5
         return true
     end
-    st.SkillNext = now + 0.25
     return false
 end
 
@@ -2949,7 +3204,7 @@ function MystrixHub.Functions.TrickScanAir(st, root, goal)
     if not ball then return nil end
     local params = SA.Flight.params(ball)
     local groundY = BV.groundBallY(state.pos)
-    local list = F.ShotPredict(params, state.pos, state.vel, state.spin, groundY, 1.2, 1 / 30)
+    local list = F.ShotPredict(params, state.pos, state.vel, state.spin, groundY, 1.5, 1 / 30)
     local rp = root.Position
     local rvel = root.AssemblyLinearVelocity
     local rv = Vector3.new(rvel.X, 0, rvel.Z)
@@ -2968,7 +3223,7 @@ function MystrixHub.Functions.TrickScanAir(st, root, goal)
                 local cand = { t = e.t, pos = p, h = h }
                 cands[#cands + 1] = cand
                 best = best or cand
-                if not bike and h >= 7.2 and h <= 10.6 and st.Mods and st.Mods.Bicycle.inZone(Vector3.new(p.X, 0, p.Z), { mouth }, 1.5) then
+                if not bike and h >= 8.2 and h <= 11.3 and st.Mods and st.Mods.Bicycle.inZone(Vector3.new(p.X, 0, p.Z), { mouth }, 1.5) then
                     bike = cand
                 end
             end
@@ -3022,10 +3277,12 @@ function MystrixHub.Functions.TrickBicycleOk(st, char, root, goal, sampleNow, gr
 end
 
 function MystrixHub.Functions.StartAutoTricks()
+    pcall(MystrixHub.Functions.InstallTrickFilter)
     return MystrixHub.Functions.AutoEngineStart()
 end
 
 function MystrixHub.Functions.StopAutoTricks()
+    MystrixHub.TrickLock = nil
     if not getgenv().MystrixAutoShoot.Enabled then
         MystrixHub.Functions.AutoEngineStop()
     end
@@ -3219,6 +3476,129 @@ function MystrixHub.Functions.ShotSolve(env, gy, from, point, speed, curve, minA
     seeds[key] = { bestTh, bestPs, from, speed, curve, a11, a12, a21, a22 }
     MystrixHub.ShotHint = { bestTh, bestPs, from, speed, curve, a11, a12, a21, a22, dx, dz, lob }
     return bestVel, spin, bestMiss, bestT, bestB, bestC
+end
+
+function MystrixHub.Functions.DribbleThreats(char, rp, f, myVel, range)
+    local team = char:GetAttribute("Team")
+    local serverNow = workspace:GetServerTimeNow()
+    local list = {}
+    for _, model in ipairs(Services.CollectionService:GetTagged("MannequinCharacter")) do
+        if model ~= char and model:IsA("Model") and model:GetAttribute("Team") ~= team and model:GetAttribute("AIGoalie") == nil then
+            local state = model:GetAttribute("BodyState")
+            local r = model:FindFirstChild("Root")
+            if r and r:IsA("BasePart") and (state == nil or state == "Animated") then
+                local rel = r.Position - rp
+                local flat = Vector3.new(rel.X, 0, rel.Z)
+                local d = flat.Magnitude
+                if d > 1 and d <= range then
+                    local dir = flat / d
+                    local ahead = f:Dot(dir)
+                    if ahead > -0.15 or d <= 6.5 then
+                        local ov = r.AssemblyLinearVelocity
+                        local vel = Vector3.new(ov.X, 0, ov.Z)
+                        local closing = (myVel - vel):Dot(dir)
+                        local ttc = closing > 1 and math.max(d - 2.8, 0) / closing or math.huge
+                        local ready = true
+                        local plr = Players:GetPlayerFromCharacter(model)
+                        if plr then
+                            local ra = plr:GetAttribute("PokeReadyAt")
+                            if type(ra) == "number" and ra > serverNow + 0.2 then ready = false end
+                        end
+                        list[#list + 1] = {
+                            model = model,
+                            d = d,
+                            dir = dir,
+                            ahead = ahead,
+                            side = f.X * dir.Z - f.Z * dir.X,
+                            closing = closing,
+                            ttc = ttc,
+                            ready = ready,
+                            eff = d - math.max(closing, 0) * 0.25,
+                        }
+                    end
+                end
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.eff < b.eff end)
+    return list
+end
+
+function MystrixHub.Functions.TrickStarted()
+    local F = MystrixHub.Functions
+    local mod = F.MannequinClientModule()
+    local char = LocalPlayer.Character
+    if not (mod and char) then return false end
+    local ok, anim = pcall(mod.getAnimator, char)
+    if not (ok and anim) then return false end
+    for _, key in ipairs({ "kickS", "headS", "bikeS", "diveS" }) do
+        local s = anim[key]
+        if s and not s.done then return true end
+    end
+    return false
+end
+
+function MystrixHub.Functions.DribblePick(speed, p, threats, crowd, last, rare)
+    rare = rare or 1
+    local sideSum = 0
+    for _, t in ipairs(threats) do
+        if t.d <= 14 and t.ahead > -0.3 then
+            sideSum += (t.side >= 0 and 1 or -1) / math.max(t.d, 1)
+        end
+    end
+    if sideSum == 0 then sideSum = p.side end
+    local away = sideSum > 0 and "Left" or "Right"
+    local d, ahead = p.d, p.ahead
+    local list = {}
+    local function add(kind, dir, half, weight)
+        local key = kind .. dir .. (half or "")
+        if key == last then weight *= 0.18 end
+        if weight > 0 then
+            list[#list + 1] = { kind = kind, dir = dir, half = half, weight = weight }
+        end
+    end
+    if ahead < -0.15 then
+        add("Hold", away, nil, 6)
+        add("Roll", away, "Bottom", 5)
+        add("Flick", away, nil, 3)
+    elseif speed < 8 then
+        add("Flick", away, nil, 5)
+        add("Elastico", away, nil, 3)
+        if ahead > 0.45 then add("Hold", away, nil, 4) end
+        if d < 5 then add("Flick", "Down", nil, 2) end
+    else
+        if d <= 4.2 then
+            add("Roll", away, "Bottom", 6)
+            add("Elastico", away, nil, 5)
+            add("Flick", away, nil, 4)
+            if speed < 22 then add("Flick", "Down", nil, 3) end
+        else
+            add("Elastico", away, nil, ahead > 0.5 and 6 or 4)
+            add("Roll", away, "Bottom", 5)
+            add("Roll", away, "Top", 4)
+            add("Flick", away, nil, ahead < 0.5 and 6 or 3)
+        end
+        local wide = rare > 1
+        if d < (wide and 9 or 7.5) and d > (wide and 3 or 3.2) and ahead > (wide and 0.5 or 0.62) and speed >= (wide and 12 or 14) and speed <= (wide and 38 or 36) then
+            add("Rainbow", "Up", nil, (crowd >= 2 and 9 or 7) * rare)
+        end
+        if crowd >= 2 and d < 8 then
+            add("Hold", away, nil, 3)
+        end
+        if math.abs(p.side) > 0.7 then
+            add("Roll", away, "Top", 4)
+        end
+    end
+    local sum = 0
+    for _, e in ipairs(list) do sum += e.weight end
+    if sum <= 0 then return nil end
+    local roll = math.random() * sum
+    for _, e in ipairs(list) do
+        roll -= e.weight
+        if roll <= 0 then return { kind = e.kind, dir = e.dir, half = e.half } end
+    end
+    local e = list[#list]
+    return { kind = e.kind, dir = e.dir, half = e.half }
 end
 
 function MystrixHub.Functions.ShotGate(from)
@@ -3689,6 +4069,36 @@ function MystrixHub.Functions.ShotFallback(from, family, lob)
     local vel = Vector3.new(px / pd * math.cos(ang) * speed, math.sin(ang) * speed, pz / pd * math.cos(ang) * speed)
     return { vel = vel, spin = Vector3.new(0, 0, 0) }
 end
+function MystrixHub.Functions.IsOriginalGoalShot(from, vel, spin)
+    local F = MystrixHub.Functions
+    if typeof(from) ~= "Vector3" or typeof(vel) ~= "Vector3" then return false end
+    if typeof(spin) ~= "Vector3" then spin = Vector3.zero end
+    local goal = F.ShotGate(from)
+    if not goal then return false end
+    if vel.X * goal.out <= 0.05 then return false end
+    local lateral
+    local topLimit = goal.top + 12
+    local okEnv, env = pcall(F.ShotEnv)
+    if okEnv and env and env.Params and SilentAimState.BallView then
+        local okGy, gy = pcall(SilentAimState.BallView.groundBallY, from)
+        if not okGy or type(gy) ~= "number" then
+            gy = goal.ground + (env.Radius or 1)
+        end
+        local seconds = math.clamp(math.abs(goal.x - from.X) / math.max(math.abs(vel.X) * 0.55, 8) + 0.8, 0.8, 6)
+        local okFly, hit = pcall(F.ShotFly, env, gy, from, vel, spin, seconds, {}, {}, 0, 1 / 60)
+        if okFly and hit then
+            if hit.Y > topLimit then return false end
+            lateral = math.abs(hit.Z - goal.z)
+        end
+    end
+    if not lateral then
+        local t = (goal.x - from.X) / vel.X
+        if t <= 0 then return false end
+        lateral = math.abs(from.Z + vel.Z * t - goal.z)
+    end
+    return lateral <= goal.half + 8
+end
+
 function MystrixHub.Functions.SilentAimRedirect(from, vel, spin, family)
     local F = MystrixHub.Functions
     local SA = SilentAimState
@@ -3705,6 +4115,15 @@ function MystrixHub.Functions.SilentAimRedirect(from, vel, spin, family)
     if not F.ShotGate(from) then
         stats.last = "gate"
         return nil
+    end
+    if SA.OnlyGoalShots == true then
+        local ok, valid = pcall(F.IsOriginalGoalShot, from, vel, spin)
+        if not ok or valid ~= true then
+            stats.last = "not goal-bound"
+            stats.skipped = (stats.skipped or 0) + 1
+            SA.Pending = nil
+            return nil
+        end
     end
     local now = os.clock()
     local last = SA.StrikeCache
@@ -3731,6 +4150,7 @@ function MystrixHub.Functions.SilentAimRedirect(from, vel, spin, family)
     stats.last = "no solution"
     return nil
 end
+
 function MystrixHub.Functions.SilentAimSolve(from, family)
     local F = MystrixHub.Functions
     local SA = SilentAimState
@@ -3761,7 +4181,16 @@ function MystrixHub.Functions.SilentAimPlan(plan)
     local family = plan.family
     if type(family) ~= "string" or MystrixHub.ShotIgnore[family] then return nil end
     local from = plan.ball
-    if not F.ShotGate(from) then return nil end
+    if typeof(from) ~= "Vector3" or not F.ShotGate(from) then return nil end
+    if SA.OnlyGoalShots == true then
+        local checkVel = plan.vel
+        if typeof(checkVel) ~= "Vector3" then
+            if typeof(plan.dir) ~= "Vector3" then return nil end
+            checkVel = Vector3.new(plan.dir.X, plan.dir.Y, plan.dir.Z) * 60
+        end
+        local ok, valid = pcall(F.IsOriginalGoalShot, from, checkVel, plan.spin)
+        if not ok or valid ~= true then return nil end
+    end
     local vel, spin = F.SilentAimSolve(from, family)
     if not vel then return nil end
     SA.Pending = { from = from, family = family, vel = vel, spin = spin, at = os.clock() }
@@ -3823,6 +4252,7 @@ function MystrixHub.Functions.PreviewAim(from, vel, spin)
     local F = MystrixHub.Functions
     local SA = getgenv().MystrixSilentAim
     if not F.SilentAimModules() then return nil end
+    if SA.OnlyGoalShots == true and not F.IsOriginalGoalShot(from, vel, spin) then return nil end
     local goal = F.ShotGate(from, vel)
     if not goal then return nil end
     local flat = Vector3.new(vel.X, 0, vel.Z)
@@ -3927,7 +4357,7 @@ function MystrixHub.Functions.InstallPickTrack()
         if H and type(self) == "table" then
             H.KickIntent = self.intent
             H.KickIntentAt = os.clock()
-            if state.Enabled and (self.intent == "Shoot" or self.intent == "Lob") then
+            if state.Enabled and state.OnlyGoalShots ~= true and (self.intent == "Shoot" or self.intent == "Lob") then
                 pcall(function()
                     local char = LocalPlayer.Character
                     local root = char and char:FindFirstChild("Root")
@@ -4057,7 +4487,7 @@ function MystrixHub.Functions.InstallPlanAim()
     local function wrapper(self, ...)
         local H = getgenv().MystrixHub
         local state = getgenv().MystrixSilentAim
-        if H and state.Enabled and type(self) == "table" and typeof(self.pos) == "Vector3" then
+        if H and state.Enabled and state.OnlyGoalShots ~= true and type(self) == "table" and typeof(self.pos) == "Vector3" then
             local intent = H.KickIntent
             if (intent == "Shoot" or intent == "Lob") and os.clock() - (H.KickIntentAt or 0) < 0.15 then
                 local ball = self.pos
@@ -4459,70 +4889,38 @@ function MystrixHub.Functions.KeeperDiveTouch(kind)
     return touch or 0.35
 end
 
-function MystrixHub.Functions.KeeperDiveStick(kind, lateral)
-    if kind == "Jump" then return Vector2.new(0, 1) end
-    local angles = { High = 40, Mid = 0, Low = -40, Smother = -80 }
-    local a = math.rad(angles[kind] or 0)
-    local cam = workspace.CurrentCamera
-    local right = cam and cam.CFrame.RightVector or Vector3.new(1, 0, 0)
-    right = Vector3.new(right.X, 0, right.Z)
-    if right.Magnitude < 0.1 then right = Vector3.new(1, 0, 0) else right = right.Unit end
-    local sign = lateral:Dot(right) >= 0 and 1 or -1
-    return Vector2.new(sign * math.cos(a), math.sin(a))
-end
-
-function MystrixHub.Functions.KeeperDiveDirect(char, kind, lateral)
-    local F = MystrixHub.Functions
-    if kind == "Jump" then return false end
-    local env = F.KeeperDiveEnv()
-    local mod = F.MannequinClientModule()
-    local goal = F.KeeperGoal()
-    if not (env and mod and goal) then return false end
-    local anim = mod.getAnimator(char)
-    local body = anim and (anim.body or (anim.getBody and anim:getBody()))
-    if not body or body.active then return false end
-    local dir = lateral
-    if dir.Magnitude < 0.001 then return false end
-    dir = dir.Unit
-    local ok, started = pcall(body.keyDive, body, kind, dir, goal.inward)
-    if not (ok and started) then return false end
-    local kdive = body.kdive
-    local payload = nil
-    if kdive and kdive.animated then
-        local eok, encoded = pcall(env.Dives.encode, kdive.move)
-        if eok then payload = encoded end
-    end
-    env.Remote:FireServer("Dive" .. kind, dir, payload)
-    return true
-end
-
 function MystrixHub.Functions.InstallTrickFilter()
     local TF = getgenv().MystrixTrickFilter
-    if TF.Hooked then return true end
+    if TF.V2 then return true end
     if not hookfunction then return false end
     local ok, Kick = pcall(function()
         return require(Services.ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Game"):WaitForChild("Kick"))
     end)
     if not ok or type(Kick) ~= "table" then return false end
     local installed = 0
-    for _, name in ipairs({ "Plan", "Header", "Bicycle", "Dive" }) do
-        local module = Kick[name]
+    for _, modName in ipairs({ "Plan", "Header", "Bicycle", "Dive" }) do
+        local module = Kick[modName]
         local fn = module and module.find
         if type(fn) == "function" then
             local orig
             local function wrapper(self, ...)
                 local H = getgenv().MystrixHub
-                local T = getgenv().MystrixAutoTricks
-                local auto = H and H.Auto
-                if T
-                    and T.Enabled
-                    and T.Auto == false
-                    and auto
-                    and auto.Phase == "air"
-                    and type(self) == "table"
-                    and type(self.family) == "table"
-                    and not (T.AirFamilies and T.AirFamilies[self.family.name]) then
-                    return nil
+                if H and type(self) == "table" and type(self.family) == "table" then
+                    local fname = self.family.name
+                    local lock = H.TrickLock
+                    if lock and os.clock() < lock.Until and fname ~= lock.Name then
+                        return nil
+                    end
+                    local T = getgenv().MystrixAutoTricks
+                    local auto = H.Auto
+                    if T
+                        and T.Enabled
+                        and T.Auto == false
+                        and auto
+                        and auto.Phase == "air"
+                        and not (T.AirFamilies and T.AirFamilies[fname]) then
+                        return nil
+                    end
                 end
                 return orig(self, ...)
             end
@@ -4533,8 +4931,8 @@ function MystrixHub.Functions.InstallTrickFilter()
             end
         end
     end
-    TF.Hooked = installed > 0
-    return TF.Hooked
+    TF.V2 = installed > 0
+    return TF.V2 == true
 end
 
 function MystrixHub.Functions.SetTrickSelection(value)
@@ -4591,52 +4989,88 @@ end
 function MystrixHub.Functions.TrickChoose(st, char, root, goal, best, bike, cands, groundY, sampleNow)
     local F = MystrixHub.Functions
     local T = getgenv().MystrixAutoTricks
-    local checked, okBike = false, false
-
-    local function bicycle()
-        if not checked then
-            checked = true
-            okBike = bike ~= nil and st.Mods ~= nil and F.TrickBicycleOk(st, char, root, goal, sampleNow, groundY)
-        end
-        return okBike
-    end
-
-    if T.Auto ~= false then
-        if bicycle() then
-            return bike, "away", "Bicycle"
-        end
-        return best, "goal", best.h <= 2.4 and "Volley" or "RunningHeader"
-    end
-
     local families = getgenv().MystrixSilentAim.Families
-    local pick, pickMode, pickFamily
-    for family in pairs(T.AirFamilies or {}) do
-        local cand, mode
-        if family == "Bicycle" then
-            if bicycle() then
-                cand, mode = bike, "away"
-            end
-        else
-            local def = families and families[family]
-            local range = def and def.ballHeight
-            if range then
-                for _, c in ipairs(cands) do
-                    if c.h >= range[1] and c.h <= range[2] then
-                        cand, mode = c, "goal"
-                        break
+    if not families then return nil end
+    local weights = {
+        Bicycle = 70,
+        SideVolley = 26,
+        Volley = 22,
+        DivingHeader = 12,
+        JumpHeader = 6,
+        RunningHeader = 4,
+        Header = 2,
+    }
+    local minT = {
+        DivingHeader = 0.5,
+        JumpHeader = 0.55,
+        RunningHeader = 0.45,
+        Header = 0.3,
+        Volley = 0.25,
+        SideVolley = 0.3,
+    }
+    local clock = os.clock()
+    local fail = st.Fail or {}
+    local locked = st.Phase == "air" and st.LockFamily or nil
+    local allowed = T.Auto == false and T.AirFamilies or nil
+    local options = {}
+    local bikeChecked, bikeValid = false, false
+    local function viableBicycle()
+        if not bikeChecked then
+            bikeChecked = true
+            bikeValid = bike ~= nil and st.Mods ~= nil and F.TrickBicycleOk(st, char, root, goal, sampleNow, groundY)
+        end
+        return bikeValid
+    end
+    for family, weight in pairs(weights) do
+        local usable = (not allowed or allowed[family])
+            and (not locked or family == locked)
+            and (locked ~= nil or (fail[family] or 0) <= clock)
+        if usable then
+            local candidate
+            if family == "Bicycle" then
+                if bike and bike.h >= 8.2 and bike.h <= 11.3 and viableBicycle() then
+                    candidate = bike
+                end
+            else
+                local def = families[family]
+                local h = def and def.ballHeight
+                if h then
+                    local preferred = (h[1] + h[2]) * 0.5
+                    local floorT = locked and 0.12 or (minT[family] or 0.3)
+                    local bestScore = math.huge
+                    for _, c in ipairs(cands or {}) do
+                        if c.t >= floorT and c.h >= h[1] + 0.08 and c.h <= h[2] - 0.08 then
+                            local score = c.t * 0.75 + math.abs(c.h - preferred) * 0.08
+                            if score < bestScore then
+                                candidate, bestScore = c, score
+                            end
+                        end
                     end
                 end
             end
-        end
-        if cand and (not pick or cand.t < pick.t) then
-            pick, pickMode, pickFamily = cand, mode, family
+            if candidate then
+                if family == st.LastAir then weight *= 0.3 end
+                options[#options + 1] = { family = family, cand = candidate, weight = weight }
+            end
         end
     end
-    return pick, pickMode, pickFamily
+    if #options == 0 then return nil end
+    local total = 0
+    for _, item in ipairs(options) do total += item.weight end
+    local roll = math.random() * total
+    for _, item in ipairs(options) do
+        roll -= item.weight
+        if roll <= 0 then
+            return item.cand, item.family == "Bicycle" and "away" or "goal", item.family
+        end
+    end
+    local item = options[#options]
+    return item.cand, item.family == "Bicycle" and "away" or "goal", item.family
 end
 
 function MystrixHub.Functions.SkillForced(side)
     local skills = getgenv().MystrixAutoTricks.Skills
+    if not skills or #skills == 0 then return nil end
     local spec = skills[math.random(#skills)]
     local away = side > 0 and "Left" or "Right"
     return { kind = spec.kind, dir = spec.dir == "Away" and away or spec.dir, half = spec.half }
@@ -4730,6 +5164,17 @@ SilentAimSection:Toggle({
 })
 
 SilentAimSection:Toggle({
+    Name = "Only Goal Shots",
+    Default = SilentAimState.OnlyGoalShots,
+    Callback = function(state)
+        local SA = getgenv().MystrixSilentAim
+        SA.OnlyGoalShots = state == true
+        SA.Pending = nil
+        SA.StrikeCache = nil
+    end,
+})
+
+SilentAimSection:Toggle({
     Name = "Auto Curve",
     Default = false,
     Callback = function(state)
@@ -4819,21 +5264,20 @@ KeeperSection:Slider({
     Min = 6,
     Max = 22,
     Suffix = "st",
-    Default = 14,
+    Default = 22,
     Callback = function(value)
         getgenv().MystrixKeeper.DiveRange = value
     end,
 })
 
 KeeperSection:Slider({
-    Name = "Keeper Dive Timing",
-    Min = 0,
-    Max = 0.3,
-    Suffix = "s",
-    Default = 0.06,
-    Decimals = 2,
+    Name = "Dive Commit Range",
+    Min = 15,
+    Max = 90,
+    Suffix = "st",
+    Default = 45,
     Callback = function(value)
-        getgenv().MystrixKeeper.DiveLead = value
+        getgenv().MystrixKeeper.CommitRange = value
     end,
 })
 
@@ -4857,6 +5301,29 @@ KeeperSection:Slider({
     Default = 34,
     Callback = function(value)
         getgenv().MystrixKeeper.RushRange = value
+    end,
+})
+
+KeeperSection:Slider({
+    Name = "Dive Timing Offset",
+    Min = 0,
+    Max = 25,
+    Suffix = "cs",
+    Default = 3,
+    Callback = function(value)
+        getgenv().MystrixKeeper.Lead = value / 100
+    end,
+})
+
+KeeperSection:Slider({
+    Name = "Dive Arm Reach",
+    Min = 2,
+    Max = 5,
+    Suffix = "st",
+    Default = 3.4,
+    Decimals = 1,
+    Callback = function(value)
+        getgenv().MystrixKeeper.ArmReach = value
     end,
 })
 
@@ -5239,7 +5706,7 @@ DefenseSection:Toggle({
 })
 
 local SkillsSection = CombatTab:Section({
-    Name = "Skills",
+    Name = "Tricks",
     Icon = "lucide:wand-sparkles",
     Side = 1,
 })
@@ -5299,7 +5766,13 @@ SkillsSection:Slider({
     end,
 })
 
-SkillsSection:Toggle({
+local DribbleSection = CombatTab:Section({
+    Name = "Dribble",
+    Icon = "lucide:footprints",
+    Side = 1,
+})
+
+DribbleSection:Toggle({
     Name = "Auto Dribble",
     Default = false,
     Callback = function(state)
@@ -5318,7 +5791,7 @@ SkillsSection:Toggle({
     end,
 })
 
-SkillsSection:Slider({
+DribbleSection:Slider({
     Name = "Dribble Range",
     Min = 6,
     Max = 20,
@@ -5326,6 +5799,25 @@ SkillsSection:Slider({
     Default = 12,
     Callback = function(value)
         getgenv().MystrixAutoDribble.Range = value
+    end,
+})
+
+DribbleSection:Toggle({
+    Name = "Dribble Evade",
+    Default = true,
+    Callback = function(state)
+        getgenv().MystrixAutoDribble.Evade = state
+    end,
+})
+
+DribbleSection:Slider({
+    Name = "Evade Strength",
+    Min = 30,
+    Max = 100,
+    Suffix = "%",
+    Default = 80,
+    Callback = function(value)
+        getgenv().MystrixAutoDribble.EvadeStrength = value / 100
     end,
 })
 
