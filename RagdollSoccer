@@ -1,3 +1,8 @@
+if not game:IsLoaded() then game.Loaded:Wait() end
+local cloneref = cloneref or function(v) return v end
+local getgenv = getgenv or function() return _G end
+local newcclosure = newcclosure or function(f) return f end
+
 if getgenv().MystrixHub then
     if MystrixHub.ConnectionController and MystrixHub.ConnectionController.Connections then
         for i, v in next, MystrixHub.ConnectionController.Connections do
@@ -23,7 +28,7 @@ if getgenv().MystrixHub then
     task.wait(0.2)
 end
 
-local CURRENT_VERSION = "v1.1.7"
+local CURRENT_VERSION = "v1.1.8"
 local DISCORD_INVITE = "46JkThWjPB"
 
 local Services = setmetatable({}, {
@@ -37,6 +42,10 @@ local Services = setmetatable({}, {
 local Players = Services.Players
 local RunService = Services.RunService
 local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do
+    task.wait()
+    LocalPlayer = Players.LocalPlayer
+end
 
 getgenv().MystrixHub = {
     Meta = {
@@ -48,7 +57,7 @@ getgenv().MystrixHub = {
 
     PlayerController = {
         Player = LocalPlayer,
-        PlayerGui = LocalPlayer.PlayerGui,
+        PlayerGui = LocalPlayer:WaitForChild("PlayerGui"),
     },
 
     UIController = {
@@ -88,22 +97,13 @@ function MystrixHub.Functions.InstallMaxPower()
         return require(Services.ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Game"):WaitForChild("Kick")).Rules
     end)
     if not ok or type(Rules) ~= "table" or type(Rules.charge) ~= "function" then return false end
-    local orig
-    local function wrapper(value)
-        local state = getgenv().MystrixMaxPower
-        if state and state.Enabled then return 1 end
-        return orig(value)
-    end
-    if hookfunction then
-        orig = hookfunction(Rules.charge, wrapper)
-        MP.Hooked = true
-    elseif setreadonly then
-        orig = Rules.charge
-        setreadonly(Rules, false)
-        Rules.charge = wrapper
-        setreadonly(Rules, true)
-        MP.Hooked = true
-    end
+    MP.Hooked = MystrixHub.Functions.HookFunction(Rules, "charge", function(callOrig)
+        return function(value)
+            local state = getgenv().MystrixMaxPower
+            if state and state.Enabled then return 1 end
+            return callOrig(value)
+        end
+    end)
     return MP.Hooked == true
 end
 
@@ -769,13 +769,102 @@ function MystrixHub.Functions.SilentAimGoalCompute()
     }
 end
 
-function MystrixHub.Functions.Budget(seconds)
-    local touch = MystrixHub.IsTouchCached
-    if touch == nil then
-        touch = MystrixHub.Functions.IsTouch()
-        MystrixHub.IsTouchCached = touch
+function MystrixHub.Functions.DeviceScale()
+    local H = MystrixHub
+    if H.DeviceScaleValue then return H.DeviceScaleValue end
+    local override = getgenv().MystrixBudgetScale
+    if type(override) == "number" and override > 0 then
+        H.DeviceScaleValue = override
+        return override
     end
-    return touch and seconds * 0.5 or seconds
+    local best = math.huge
+    for _ = 1, 3 do
+        local t0 = os.clock()
+        local v = Vector3.new(1, 2, 3)
+        local acc = 0
+        for i = 1, 20000 do
+            v = Vector3.new(v.X * 0.999 + 0.01, v.Y + 0.002, v.Z * 1.001):Lerp(Vector3.new(i, 0, 1), 0.001)
+            acc += v.Magnitude
+        end
+        best = math.min(best, os.clock() - t0)
+    end
+    local scale = math.clamp(best / 0.004, 1, 6)
+    if scale < 1.4 then scale = 1 end
+    H.DeviceScaleValue = scale
+    return scale
+end
+
+function MystrixHub.Functions.Budget(seconds)
+    return seconds * MystrixHub.Functions.DeviceScale()
+end
+
+function MystrixHub.Functions.HookFunction(tbl, key, build)
+    local target = tbl[key]
+    if type(target) ~= "function" then return false end
+    local holder = { fn = target }
+    local wrapper = build(function(...) return holder.fn(...) end)
+    if hookfunction then
+        local ok, old = pcall(hookfunction, target, wrapper)
+        if ok then
+            if type(old) == "function" then
+                holder.fn = old
+                return true
+            end
+            return false
+        end
+    end
+    local function replace()
+        tbl[key] = wrapper
+    end
+    if pcall(replace) and tbl[key] == wrapper then return true end
+    if setreadonly then
+        pcall(setreadonly, tbl, false)
+        if pcall(replace) and tbl[key] == wrapper then return true end
+    end
+    return false
+end
+
+function MystrixHub.Functions.CapabilityReport()
+    local env = getgenv()
+    local names = { "cloneref", "hookfunction", "hookmetamethod", "getnamecallmethod", "setnamecallmethod", "newcclosure", "setreadonly", "loadstring", "request", "http_request" }
+    local missing = {}
+    for _, name in ipairs(names) do
+        if env[name] == nil then
+            missing[#missing + 1] = name
+        end
+    end
+    local scale = MystrixHub.Functions.DeviceScale()
+    local touch = MystrixHub.Functions.IsTouch()
+    MystrixHub.Capabilities = { missing = missing, scale = scale, touch = touch }
+    warn("[Mystrix Hub] missing: " .. (#missing > 0 and table.concat(missing, ", ") or "none") .. " | device scale: " .. string.format("%.2f", scale) .. " | touch: " .. tostring(touch))
+end
+
+function MystrixHub.Functions.PlanSyncCopy(plan)
+    local state = getgenv().MystrixSilentAim
+    if not state.Enabled or state.PlanSync == false then return nil end
+    if type(plan) ~= "table"
+        or plan.hold == true
+        or typeof(plan.ball) ~= "Vector3"
+        or type(plan.family) ~= "string"
+        or plan.power == nil
+        or plan.leg == nil
+        or typeof(plan.dir) ~= "Vector3" then
+        return nil
+    end
+    local ok, vel, spin = pcall(MystrixHub.Functions.SilentAimPlan, plan)
+    if not ok or not vel then return nil end
+    local copy = table.clone(plan)
+    local m = math.sqrt(vel.X * vel.X + vel.Z * vel.Z)
+    if m > 0.001 then
+        copy.dir = Vector3.new(vel.X / m, 0, vel.Z / m)
+    end
+    if typeof(plan.vel) == "Vector3" then
+        copy.vel = vel
+    end
+    if typeof(plan.spin) == "Vector3" and spin then
+        copy.spin = spin
+    end
+    return copy
 end
 
 function MystrixHub.Functions.MannequinSnapshot()
@@ -3786,7 +3875,8 @@ function MystrixHub.Functions.ShotBest(from, family, lob, budget, minAngle, mode
     local kz = kpos and kpos.Z or goal.z
     local oX = -goal.out
     local bx, bz, bn = F.ShotBodies(goal, lob)
-    local curveOn = SA.AutoCurve == true and not lob and flatD >= 8 and not (fam and fam.header)
+    local slow = F.DeviceScale() > 3
+    local curveOn = SA.AutoCurve == true and not lob and flatD >= 8 and not (fam and fam.header) and (mode == "strike" or not slow)
     local k = math.min(math.clamp(30 + flatD * 0.5, 40, 70) * (SA.CurveAmount or 1), 72)
     local zLim, yMin, yMax = F.ShotBounds(env)
     local react = kit and math.max(kit.cfg.Reaction[1] - 0.03, 0.1) or 0.2
@@ -3826,7 +3916,11 @@ function MystrixHub.Functions.ShotBest(from, family, lob, budget, minAngle, mode
         else
             local sign = curve > 0 and 1 or -1
             key = ((((math.floor(p.Z * 2) + 2000) * 4096 + (math.floor(p.Y * 2) + 2000)) * 8 + (sign + 1) * 2 + (lob and 1 or 0)) * 2 + (goal.out > 0 and 1 or 0))
-            vel, spin, miss, ft, blocked, c = F.ShotSolve(env, gy, from, p, speed, curve, minA, maxA, key, bx, bz, bn, lob, simDt, candIters, dl)
+            local cdl = dl
+if dl and mode == "strike" then
+    cdl = math.max(dl, os.clock() + math.max(budget or 0.012, 0.012) * 0.5)
+end
+vel, spin, miss, ft, blocked, c = F.ShotSolve(env, gy, from, p, speed, curve, minA, maxA, key, bx, bz, bn, lob, simDt, candIters, cdl)
         end
         if not vel then return nil end
         local dz = math.abs(c.Z - goal.z)
@@ -3983,9 +4077,9 @@ function MystrixHub.Functions.ShotBest(from, family, lob, budget, minAngle, mode
     if mode == "strike" then
         local vel, spin, miss, ft, blocked, c
         if result.curve == 0 then
-            vel, spin, miss, ft, blocked, c = F.PitchSolve(env, gy, from, result.point, speed, minA, maxA, lob, 1 / 120, bx, bz, bn, nil, result.th)
+            vel, spin, miss, ft, blocked, c = F.PitchSolve(env, gy, from, result.point, speed, minA, maxA, lob, (slow and 1 / 60 or 1 / 120), bx, bz, bn, nil, result.th)
         elseif result.key then
-            vel, spin, miss, ft, blocked, c = F.ShotSolve(env, gy, from, result.point, speed, result.curve, minA, maxA, result.key, bx, bz, bn, lob, lob and 1 / 90 or 1 / 120, 8, nil)
+            vel, spin, miss, ft, blocked, c = F.ShotSolve(env, gy, from, result.point, speed, result.curve, minA, maxA, result.key, bx, bz, bn, lob, slow and 1 / 60 or (lob and 1 / 90 or 1 / 120), 8, nil)
         end
         if vel and c then
             local dz = math.abs(c.Z - goal.z)
@@ -4200,46 +4294,57 @@ end
 function MystrixHub.Functions.InstallPlanSync()
     local SA = getgenv().MystrixSilentAim
     if SA.PlanHooked then return true end
-    if not (hookmetamethod and getnamecallmethod and setnamecallmethod and newcclosure) then return false end
-    local old
-    old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-        local state = getgenv().MystrixSilentAim
-        if state.Enabled and state.PlanSync ~= false and getnamecallmethod() == "FireServer" then
-            local plan = ...
-            if type(plan) == "table"
-                and plan.hold ~= true
-                and typeof(plan.ball) == "Vector3"
-                and type(plan.family) == "string"
-                and plan.power ~= nil
-                and plan.leg ~= nil
-                and typeof(plan.dir) == "Vector3" then
-                local H = getgenv().MystrixHub
-                local F = H and H.Functions
-                if F then
-                    local ok, vel, spin = pcall(F.SilentAimPlan, plan)
+    if hookmetamethod and getnamecallmethod and setnamecallmethod then
+        local ok = pcall(function()
+            local old
+            old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+                if getgenv().MystrixSilentAim.Enabled and getnamecallmethod() == "FireServer" then
+                    local copy = nil
+                    local H = getgenv().MystrixHub
+                    local FF = H and H.Functions
+                    if FF then
+                        copy = FF.PlanSyncCopy((...))
+                    end
                     setnamecallmethod("FireServer")
-                    if ok and vel then
-                        local copy = table.clone(plan)
-                        local m = math.sqrt(vel.X * vel.X + vel.Z * vel.Z)
-                        if m > 0.001 then
-                            copy.dir = Vector3.new(vel.X / m, 0, vel.Z / m)
-                        end
-                        if typeof(plan.vel) == "Vector3" then
-                            copy.vel = vel
-                        end
-                        if typeof(plan.spin) == "Vector3" and spin then
-                            copy.spin = spin
-                        end
+                    if copy then
                         return old(self, copy, select(2, ...))
                     end
                 end
-            end
+                return old(self, ...)
+            end))
+        end)
+        if ok then
+            SA.PlanHooked = true
+            return true
         end
-        return old(self, ...)
-    end))
-    SA.PlanHooked = true
-    return true
+    end
+    if hookfunction then
+        local ok = pcall(function()
+            local fire = Instance.new("RemoteEvent").FireServer
+            local old
+            old = hookfunction(fire, newcclosure(function(self, ...)
+                if getgenv().MystrixSilentAim.Enabled then
+                    local H = getgenv().MystrixHub
+                    local FF = H and H.Functions
+                    local copy = FF and FF.PlanSyncCopy((...))
+                    if copy then
+                        return old(self, copy, select(2, ...))
+                    end
+                end
+                return old(self, ...)
+            end))
+            if type(old) ~= "function" then
+                error("no original")
+            end
+        end)
+        if ok then
+            SA.PlanHooked = true
+            return true
+        end
+    end
+    return false
 end
+
 function MystrixHub.Functions.CurrentFamily()
     local name = MystrixHub.ShotFamily
     if name and os.clock() - (MystrixHub.ShotFamilyAt or 0) < 0.6 then
@@ -4348,43 +4453,42 @@ function MystrixHub.Functions.InstallPickTrack()
     local ok, Select = pcall(function()
         return require(Services.ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Game"):WaitForChild("Kick")).Select
     end)
-    if not ok or type(Select) ~= "table" or type(Select.pick) ~= "function" or not hookfunction then return end
-    local orig
-    local function wrapper(self, forced)
-        local H = getgenv().MystrixHub
-        local state = getgenv().MystrixSilentAim
-        local input = self
-        if H and type(self) == "table" then
-            H.KickIntent = self.intent
-            H.KickIntentAt = os.clock()
-            if state.Enabled and state.OnlyGoalShots ~= true and (self.intent == "Shoot" or self.intent == "Lob") then
-                pcall(function()
-                    local char = LocalPlayer.Character
-                    local root = char and char:FindFirstChild("Root")
-                    if not root then return end
-                    local p = root.Position
-                    local dir = H.Functions.KickGoalDir(p.X, p.Z)
-                    if dir then
-                        local copy = table.clone(self)
-                        copy.aimDir = dir
-                        copy.travel = dir
-                        copy.facing = dir
-                        copy.sideStepping = false
-                        input = copy
-                    end
-                end)
+    if not ok or type(Select) ~= "table" or type(Select.pick) ~= "function" then return end
+    local installed = MystrixHub.Functions.HookFunction(Select, "pick", function(callOrig)
+        return function(self, forced)
+            local H = getgenv().MystrixHub
+            local state = getgenv().MystrixSilentAim
+            local input = self
+            if H and type(self) == "table" then
+                H.KickIntent = self.intent
+                H.KickIntentAt = os.clock()
+                if state.Enabled and state.OnlyGoalShots ~= true and (self.intent == "Shoot" or self.intent == "Lob") then
+                    pcall(function()
+                        local char = LocalPlayer.Character
+                        local root = char and char:FindFirstChild("Root")
+                        if not root then return end
+                        local p = root.Position
+                        local dir = H.Functions.KickGoalDir(p.X, p.Z)
+                        if dir then
+                            local copy = table.clone(self)
+                            copy.aimDir = dir
+                            copy.travel = dir
+                            copy.facing = dir
+                            copy.sideStepping = false
+                            input = copy
+                        end
+                    end)
+                end
             end
+            local result, second = callOrig(input, forced)
+            if type(result) == "table" and type(result.family) == "table" and type(result.family.name) == "string" and H then
+                H.ShotFamily = result.family.name
+                H.ShotFamilyAt = os.clock()
+            end
+            return result, second
         end
-        local result, second = orig(input, forced)
-        if type(result) == "table" and type(result.family) == "table" and type(result.family.name) == "string" and H then
-            H.ShotFamily = result.family.name
-            H.ShotFamilyAt = os.clock()
-        end
-        return result, second
-    end
-    local hok, res = pcall(hookfunction, Select.pick, wrapper)
-    if hok and res then
-        orig = res
+    end)
+    if installed then
         SA.PickHooked = true
     end
 end
@@ -4420,38 +4524,29 @@ function MystrixHub.Functions.InstallSilentAim()
     if not SA.Hooked then
         local installed = 0
         for _, name in ipairs({ "strike", "strikeFree" }) do
-            local fn = DribbleClient[name]
-            if type(fn) == "function" then
-                local orig
-                local function wrapper(from, vel, spin, family, t)
-                    if SA.Enabled and SA.Redirect and type(family) == "string" and typeof(from) == "Vector3" and typeof(vel) == "Vector3" then
-                        local rok, newVel, newSpin = pcall(SA.Redirect, from, vel, spin, family)
-                        if rok then
-                            if newVel then
-                                SA.LastVel = newVel
-                                SA.LastAt = os.clock()
-                                vel = newVel
-                                spin = newSpin or spin
-                                local H = getgenv().MystrixHub
-                                if H then H.ShotLast = nil end
+            if type(DribbleClient[name]) == "function" then
+                local hooked = F.HookFunction(DribbleClient, name, function(callOrig)
+                    return function(from, vel, spin, family, t)
+                        if SA.Enabled and SA.Redirect and type(family) == "string" and typeof(from) == "Vector3" and typeof(vel) == "Vector3" then
+                            local rok, newVel, newSpin = pcall(SA.Redirect, from, vel, spin, family)
+                            if rok then
+                                if newVel then
+                                    SA.LastVel = newVel
+                                    SA.LastAt = os.clock()
+                                    vel = newVel
+                                    spin = newSpin or spin
+                                    local H = getgenv().MystrixHub
+                                    if H then H.ShotLast = nil end
+                                end
+                            else
+                                SA.LastError = tostring(newVel)
                             end
-                        else
-                            SA.LastError = tostring(newVel)
                         end
+                        return callOrig(from, vel, spin, family, t)
                     end
-                    return orig(from, vel, spin, family, t)
-                end
-                if hookfunction then
-                    local hok, result = pcall(hookfunction, fn, wrapper)
-                    if hok and result then
-                        orig = result
-                        installed += 1
-                    end
-                else
-                    orig = fn
-                    if pcall(function() DribbleClient[name] = wrapper end) then
-                        installed += 1
-                    end
+                end)
+                if hooked then
+                    installed += 1
                 end
             end
         end
@@ -4478,34 +4573,33 @@ end
 
 function MystrixHub.Functions.InstallPlanAim()
     local SA = getgenv().MystrixSilentAim
-    if SA.PlanAimHooked or not hookfunction then return end
+    if SA.PlanAimHooked then return end
     local ok, Plan = pcall(function()
         return require(Services.ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Game"):WaitForChild("Kick")).Plan
     end)
     if not ok or type(Plan) ~= "table" or type(Plan.find) ~= "function" then return end
-    local orig
-    local function wrapper(self, ...)
-        local H = getgenv().MystrixHub
-        local state = getgenv().MystrixSilentAim
-        if H and state.Enabled and state.OnlyGoalShots ~= true and type(self) == "table" and typeof(self.pos) == "Vector3" then
-            local intent = H.KickIntent
-            if (intent == "Shoot" or intent == "Lob") and os.clock() - (H.KickIntentAt or 0) < 0.15 then
-                local ball = self.pos
-                if type(self.ballAt) == "function" and self.now then
-                    local bok, bp = pcall(self.ballAt, self.now)
-                    if bok and typeof(bp) == "Vector3" then ball = bp end
-                end
-                local dir = H.Functions.KickGoalDir(ball.X, ball.Z)
-                if dir then
-                    self.aimDir = dir
+    local installed = MystrixHub.Functions.HookFunction(Plan, "find", function(callOrig)
+        return function(self, ...)
+            local H = getgenv().MystrixHub
+            local state = getgenv().MystrixSilentAim
+            if H and state.Enabled and state.OnlyGoalShots ~= true and type(self) == "table" and typeof(self.pos) == "Vector3" then
+                local intent = H.KickIntent
+                if (intent == "Shoot" or intent == "Lob") and os.clock() - (H.KickIntentAt or 0) < 0.15 then
+                    local ball = self.pos
+                    if type(self.ballAt) == "function" and self.now then
+                        local bok, bp = pcall(self.ballAt, self.now)
+                        if bok and typeof(bp) == "Vector3" then ball = bp end
+                    end
+                    local dir = H.Functions.KickGoalDir(ball.X, ball.Z)
+                    if dir then
+                        self.aimDir = dir
+                    end
                 end
             end
+            return callOrig(self, ...)
         end
-        return orig(self, ...)
-    end
-    local hok, res = pcall(hookfunction, Plan.find, wrapper)
-    if hok and res then
-        orig = res
+    end)
+    if installed then
         SA.PlanAimHooked = true
     end
 end
@@ -4892,7 +4986,6 @@ end
 function MystrixHub.Functions.InstallTrickFilter()
     local TF = getgenv().MystrixTrickFilter
     if TF.V2 then return true end
-    if not hookfunction then return false end
     local ok, Kick = pcall(function()
         return require(Services.ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Game"):WaitForChild("Kick"))
     end)
@@ -4900,33 +4993,31 @@ function MystrixHub.Functions.InstallTrickFilter()
     local installed = 0
     for _, modName in ipairs({ "Plan", "Header", "Bicycle", "Dive" }) do
         local module = Kick[modName]
-        local fn = module and module.find
-        if type(fn) == "function" then
-            local orig
-            local function wrapper(self, ...)
-                local H = getgenv().MystrixHub
-                if H and type(self) == "table" and type(self.family) == "table" then
-                    local fname = self.family.name
-                    local lock = H.TrickLock
-                    if lock and os.clock() < lock.Until and fname ~= lock.Name then
-                        return nil
+        if type(module) == "table" and type(module.find) == "function" then
+            local hooked = MystrixHub.Functions.HookFunction(module, "find", function(callOrig)
+                return function(self, ...)
+                    local H = getgenv().MystrixHub
+                    if H and type(self) == "table" and type(self.family) == "table" then
+                        local fname = self.family.name
+                        local lock = H.TrickLock
+                        if lock and os.clock() < lock.Until and fname ~= lock.Name then
+                            return nil
+                        end
+                        local T = getgenv().MystrixAutoTricks
+                        local auto = H.Auto
+                        if T
+                            and T.Enabled
+                            and T.Auto == false
+                            and auto
+                            and auto.Phase == "air"
+                            and not (T.AirFamilies and T.AirFamilies[fname]) then
+                            return nil
+                        end
                     end
-                    local T = getgenv().MystrixAutoTricks
-                    local auto = H.Auto
-                    if T
-                        and T.Enabled
-                        and T.Auto == false
-                        and auto
-                        and auto.Phase == "air"
-                        and not (T.AirFamilies and T.AirFamilies[fname]) then
-                        return nil
-                    end
+                    return callOrig(self, ...)
                 end
-                return orig(self, ...)
-            end
-            local hok, res = pcall(hookfunction, fn, wrapper)
-            if hok and res then
-                orig = res
+            end)
+            if hooked then
                 installed += 1
             end
         end
@@ -5076,7 +5167,26 @@ function MystrixHub.Functions.SkillForced(side)
     return { kind = spec.kind, dir = spec.dir == "Away" and away or spec.dir, half = spec.half }
 end
 
-local lib = loadstring(game:HttpGet("https://raw.githubusercontent.com/wadhiaubsjdh8yhwda/a/refs/heads/main/lib"))()
+local function fetchSource(url)
+    local ok, body = pcall(function() return game:HttpGet(url) end)
+    if ok and type(body) == "string" and #body > 0 then return body end
+    local req = (syn and syn.request) or request or http_request or (http and http.request)
+    if req then
+        local ok2, res = pcall(req, { Url = url, Method = "GET" })
+        if ok2 and type(res) == "table" and type(res.Body) == "string" and #res.Body > 0 then
+            return res.Body
+        end
+    end
+    return nil
+end
+
+local libSource = fetchSource("https://raw.githubusercontent.com/wadhiaubsjdh8yhwda/a/refs/heads/main/lib")
+local libLoader = libSource and loadstring(libSource)
+local lib = libLoader and libLoader()
+if not lib then
+    warn("[Mystrix Hub] could not load the UI library")
+    return
+end
 
 local CurrentGameName = game.Name
 pcall(function()
@@ -5831,5 +5941,5 @@ local SettingsTab = Window:Tab({
 MystrixHub.UIController.Tabs.Settings = SettingsTab
 
 Window:BuildSettings(SettingsTab)
-
+task.spawn(MystrixHub.Functions.CapabilityReport)
 return Window
