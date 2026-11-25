@@ -1455,7 +1455,10 @@ local function buildDropdown(win, parent, options)
 	addGradient(input)
 	local stroke = new("UIStroke", { ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Thickness = 1 }, input)
 	bind(stroke, "Color", function() return dropdown.Open and Current.Accent or Current.Outline end)
-	local value = label(input, { Fg = "InactiveText", TextSize = 13, X = 7, RowH = Metrics.InputH - 2, Right = 8, Truncate = Enum.TextTruncate.AtEnd })
+	local value = label(input, { Fg = "InactiveText", TextSize = 13, X = 7, RowH = Metrics.InputH - 2, Right = 28, Truncate = Enum.TextTruncate.AtEnd })
+	local chevron = makeIcon(input, "chevron", 14, function()
+		return dropdown.Open and Current.Text or Current.InactiveText
+	end, "Element", { AnchorPoint = Vec2(0.5, 0.5), Position = Dim2(1, -15, 0.5, 0) })
 
 	local panel = new("TextButton", { Bg = "Background", BackgroundTransparency = 1, Radius = Metrics.Radius, Visible = false, Size = Offset(10, 0) }, win.Dropdowns)
 	local panelStroke = new("UIStroke", { ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Thickness = 1, Transparency = 1 }, panel)
@@ -1636,6 +1639,8 @@ local function buildDropdown(win, parent, options)
 		if open == dropdown.Open then return end
 		dropdown.Open = open
 		refresh(stroke)
+		chevron.Update()
+		place(chevron.Root, "Rotation", open and 180 or 0, true, "Smooth")
 		local width = input.AbsoluteSize.X / LayerScale
 		if open then
 			if win.OpenDropdown and win.OpenDropdown ~= dropdown then win.OpenDropdown:Toggle(false) end
