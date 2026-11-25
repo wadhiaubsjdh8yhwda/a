@@ -17,7 +17,7 @@ local Metrics = {
 	Radius = 3, SmallRadius = 2, CardRadius = 4, PillRadius = 5, PopupRadius = 5, FloatRadius = 6, WindowRadius = 6,
 	WindowW = 586, WindowH = 466, MinWindowW = 520, MinWindowH = 380, SidebarW = 141, ContentX = 142, ColumnW = 207,
 	TabW = 121, TabH = 28, TabPitch = 32, CategoryToTab = 25, TabToCategory = 25, FirstCategory = 56, SearchH = 28,
-	Row = 16, TopBar = 26, HeaderH = 24, HeaderDescH = 40,
+	Row = 16, TopBar = 32, LineY = 24, HeaderH = 28, HeaderDescH = 42,
 	DividerH = 9, SliderH = 33, DropdownH = 47, InputH = 26, ButtonH = 28, ListRowH = 24,
 	ToggleW = 28, ToggleH = 16, ToggleKnob = 10, Knob = 11, PickerKnob = 8, TrackH = 9, TrackY = 24, TrackInset = 5,
 	ChipH = 16, ValueChipH = 17, Swatch = 14, ChipGap = 2,
@@ -30,35 +30,10 @@ local Themes = {
 		Text = RGB(232, 234, 245), InactiveText = RGB(126, 130, 148), Accent = RGB(113, 159, 226), Element = RGB(54, 57, 68),
 		Gradient = RGB(172, 187, 209), Shadow = RGB(0, 0, 0), HoveredElement = RGB(72, 77, 90),
 	},
-	Afterglow = {
-		Background = RGB(34, 28, 25), Tab = RGB(30, 23, 20), Outline = RGB(60, 46, 38), Inline = RGB(42, 33, 29),
-		Text = RGB(240, 232, 226), InactiveText = RGB(140, 122, 110), Accent = RGB(255, 145, 60), Element = RGB(49, 34, 27),
-		Gradient = RGB(172, 167, 163), Shadow = RGB(0, 0, 0), HoveredElement = RGB(70, 51, 42),
-	},
 	Frostbite = {
 		Background = RGB(22, 30, 38), Tab = RGB(16, 25, 32), Outline = RGB(42, 58, 72), Inline = RGB(27, 38, 47),
 		Text = RGB(228, 240, 248), InactiveText = RGB(114, 136, 152), Accent = RGB(86, 219, 255), Element = RGB(28, 39, 52),
 		Gradient = RGB(164, 172, 178), Shadow = RGB(0, 0, 0), HoveredElement = RGB(44, 60, 74),
-	},
-	Volt = {
-		Background = RGB(24, 24, 20), Tab = RGB(18, 18, 14), Outline = RGB(54, 54, 40), Inline = RGB(32, 32, 26),
-		Text = RGB(242, 242, 226), InactiveText = RGB(134, 134, 112), Accent = RGB(255, 250, 76), Element = RGB(32, 32, 26),
-		Gradient = RGB(170, 170, 158), Shadow = RGB(0, 0, 0), HoveredElement = RGB(58, 58, 44),
-	},
-	Obsidian = {
-		Background = RGB(16, 16, 18), Tab = RGB(12, 11, 14), Outline = RGB(44, 42, 52), Inline = RGB(24, 24, 29),
-		Text = RGB(234, 232, 244), InactiveText = RGB(118, 114, 134), Accent = RGB(159, 109, 255), Element = RGB(24, 23, 31),
-		Gradient = RGB(166, 164, 175), Shadow = RGB(0, 0, 0), HoveredElement = RGB(236, 240, 248),
-	},
-	["Sakura Drift"] = {
-		Background = RGB(38, 28, 34), Tab = RGB(32, 23, 29), Outline = RGB(70, 50, 62), Inline = RGB(48, 35, 43),
-		Text = RGB(248, 234, 242), InactiveText = RGB(150, 122, 138), Accent = RGB(255, 155, 205), Element = RGB(44, 46, 48),
-		Gradient = RGB(176, 166, 172), Shadow = RGB(0, 0, 0), HoveredElement = RGB(77, 53, 67),
-	},
-	["Neon Mirage"] = {
-		Background = RGB(22, 16, 34), Tab = RGB(17, 12, 28), Outline = RGB(54, 40, 82), Inline = RGB(32, 23, 48),
-		Text = RGB(238, 232, 252), InactiveText = RGB(128, 114, 160), Accent = RGB(255, 86, 255), Element = RGB(30, 21, 46),
-		Gradient = RGB(144, 163, 182), Shadow = RGB(0, 0, 0), HoveredElement = RGB(56, 39, 84),
 	},
 	["Copper Dust"] = {
 		Background = RGB(39, 30, 25), Tab = RGB(34, 25, 20), Outline = RGB(72, 54, 42), Inline = RGB(49, 36, 28),
@@ -84,11 +59,6 @@ local Themes = {
 		Background = RGB(20, 30, 26), Tab = RGB(15, 24, 20), Outline = RGB(38, 60, 50), Inline = RGB(26, 40, 34),
 		Text = RGB(226, 244, 236), InactiveText = RGB(108, 138, 124), Accent = RGB(72, 214, 150), Element = RGB(24, 38, 32),
 		Gradient = RGB(164, 176, 170), Shadow = RGB(0, 0, 0), HoveredElement = RGB(42, 66, 55),
-	},
-	Crimson = {
-		Background = RGB(30, 20, 22), Tab = RGB(24, 15, 17), Outline = RGB(62, 40, 44), Inline = RGB(40, 27, 30),
-		Text = RGB(246, 230, 232), InactiveText = RGB(146, 114, 120), Accent = RGB(236, 72, 90), Element = RGB(38, 24, 27),
-		Gradient = RGB(176, 164, 166), Shadow = RGB(0, 0, 0), HoveredElement = RGB(68, 44, 49),
 	},
 	Midnight = {
 		Background = RGB(18, 20, 34), Tab = RGB(13, 15, 28), Outline = RGB(40, 45, 74), Inline = RGB(26, 29, 48),
@@ -126,9 +96,94 @@ local Themes = {
 		Gradient = RGB(224, 210, 215), Shadow = RGB(120, 120, 120), HoveredElement = RGB(250, 236, 240),
 	},
 }
+Themes.Crimson = {
+	Background = RGB(24, 17, 20), Tab = RGB(19, 13, 16), Outline = RGB(60, 40, 46), Inline = RGB(34, 24, 28),
+	Text = RGB(242, 230, 232), InactiveText = RGB(142, 112, 120), Accent = RGB(232, 64, 88), Element = RGB(32, 22, 26),
+	Gradient = RGB(186, 174, 176), Shadow = RGB(0, 0, 0), HoveredElement = RGB(56, 38, 45),
+}
+Themes.Afterglow = {
+	Background = RGB(28, 22, 20), Tab = RGB(22, 17, 15), Outline = RGB(62, 48, 40), Inline = RGB(38, 30, 26),
+	Text = RGB(244, 234, 226), InactiveText = RGB(144, 124, 110), Accent = RGB(255, 150, 70), Element = RGB(35, 27, 23),
+	Gradient = RGB(184, 176, 168), Shadow = RGB(0, 0, 0), HoveredElement = RGB(60, 47, 40),
+}
+Themes.Volt = {
+	Background = RGB(20, 21, 17), Tab = RGB(15, 16, 12), Outline = RGB(52, 54, 38), Inline = RGB(30, 31, 24),
+	Text = RGB(244, 245, 228), InactiveText = RGB(128, 132, 106), Accent = RGB(214, 255, 72), Element = RGB(27, 28, 22),
+	Gradient = RGB(178, 180, 166), Shadow = RGB(0, 0, 0), HoveredElement = RGB(50, 53, 38),
+}
+Themes.Obsidian = {
+	Background = RGB(15, 15, 18), Tab = RGB(11, 11, 14), Outline = RGB(44, 42, 54), Inline = RGB(23, 23, 29),
+	Text = RGB(236, 234, 246), InactiveText = RGB(118, 114, 136), Accent = RGB(150, 105, 255), Element = RGB(21, 21, 27),
+	Gradient = RGB(172, 170, 184), Shadow = RGB(0, 0, 0), HoveredElement = RGB(42, 40, 54),
+}
+Themes["Sakura Drift"] = {
+	Background = RGB(34, 26, 32), Tab = RGB(28, 21, 26), Outline = RGB(70, 52, 63), Inline = RGB(45, 34, 41),
+	Text = RGB(250, 236, 244), InactiveText = RGB(152, 124, 140), Accent = RGB(255, 148, 196), Element = RGB(41, 31, 38),
+	Gradient = RGB(186, 174, 180), Shadow = RGB(0, 0, 0), HoveredElement = RGB(72, 53, 65),
+}
+Themes["Neon Mirage"] = {
+	Background = RGB(20, 15, 32), Tab = RGB(15, 11, 26), Outline = RGB(56, 42, 86), Inline = RGB(30, 22, 47),
+	Text = RGB(240, 234, 254), InactiveText = RGB(128, 114, 162), Accent = RGB(226, 96, 255), Element = RGB(27, 20, 43),
+	Gradient = RGB(170, 168, 192), Shadow = RGB(0, 0, 0), HoveredElement = RGB(54, 40, 84),
+}
+Themes["Tokyo Night"] = {
+	Background = RGB(26, 27, 38), Tab = RGB(22, 22, 30), Outline = RGB(52, 56, 80), Inline = RGB(36, 40, 59),
+	Text = RGB(192, 202, 245), InactiveText = RGB(115, 122, 162), Accent = RGB(122, 162, 247), Element = RGB(31, 35, 53),
+	Gradient = RGB(176, 182, 206), Shadow = RGB(0, 0, 0), HoveredElement = RGB(47, 53, 79),
+}
+Themes.Dracula = {
+	Background = RGB(40, 42, 54), Tab = RGB(33, 34, 44), Outline = RGB(68, 71, 90), Inline = RGB(48, 50, 66),
+	Text = RGB(248, 248, 242), InactiveText = RGB(125, 132, 170), Accent = RGB(189, 147, 249), Element = RGB(45, 47, 62),
+	Gradient = RGB(186, 186, 196), Shadow = RGB(0, 0, 0), HoveredElement = RGB(68, 71, 95),
+}
+Themes.Nord = {
+	Background = RGB(46, 52, 64), Tab = RGB(40, 45, 56), Outline = RGB(67, 76, 94), Inline = RGB(53, 60, 75),
+	Text = RGB(229, 233, 240), InactiveText = RGB(125, 136, 158), Accent = RGB(136, 192, 208), Element = RGB(50, 57, 71),
+	Gradient = RGB(190, 196, 206), Shadow = RGB(0, 0, 0), HoveredElement = RGB(67, 76, 94),
+}
+Themes.Catppuccin = {
+	Background = RGB(30, 30, 46), Tab = RGB(24, 24, 37), Outline = RGB(69, 71, 90), Inline = RGB(40, 40, 58),
+	Text = RGB(205, 214, 244), InactiveText = RGB(127, 132, 156), Accent = RGB(203, 166, 247), Element = RGB(35, 35, 52),
+	Gradient = RGB(185, 188, 205), Shadow = RGB(0, 0, 0), HoveredElement = RGB(58, 59, 80),
+}
+Themes["Rose Pine"] = {
+	Background = RGB(25, 23, 36), Tab = RGB(21, 19, 31), Outline = RGB(57, 53, 82), Inline = RGB(31, 29, 46),
+	Text = RGB(224, 222, 244), InactiveText = RGB(110, 106, 134), Accent = RGB(235, 111, 146), Element = RGB(38, 35, 58),
+	Gradient = RGB(180, 178, 196), Shadow = RGB(0, 0, 0), HoveredElement = RGB(64, 61, 82),
+}
+Themes.Gruvbox = {
+	Background = RGB(40, 40, 40), Tab = RGB(32, 32, 32), Outline = RGB(80, 73, 69), Inline = RGB(50, 48, 47),
+	Text = RGB(235, 219, 178), InactiveText = RGB(146, 131, 116), Accent = RGB(250, 189, 47), Element = RGB(46, 44, 43),
+	Gradient = RGB(190, 182, 165), Shadow = RGB(0, 0, 0), HoveredElement = RGB(70, 66, 63),
+}
+Themes.Sunset = {
+	Background = RGB(32, 22, 34), Tab = RGB(26, 17, 28), Outline = RGB(66, 46, 70), Inline = RGB(42, 30, 46),
+	Text = RGB(250, 232, 236), InactiveText = RGB(150, 118, 140), Accent = RGB(255, 112, 104), Element = RGB(38, 26, 42),
+	Gradient = RGB(190, 176, 182), Shadow = RGB(0, 0, 0), HoveredElement = RGB(64, 46, 68),
+}
+Themes.Aurora = {
+	Background = RGB(18, 26, 32), Tab = RGB(14, 21, 27), Outline = RGB(40, 62, 70), Inline = RGB(24, 36, 43),
+	Text = RGB(225, 245, 240), InactiveText = RGB(104, 140, 140), Accent = RGB(110, 231, 183), Element = RGB(22, 33, 40),
+	Gradient = RGB(170, 184, 184), Shadow = RGB(0, 0, 0), HoveredElement = RGB(38, 58, 66),
+}
+Themes.Ember = {
+	Background = RGB(26, 20, 18), Tab = RGB(20, 15, 13), Outline = RGB(62, 46, 40), Inline = RGB(36, 28, 25),
+	Text = RGB(245, 232, 222), InactiveText = RGB(146, 122, 108), Accent = RGB(255, 122, 48), Element = RGB(33, 25, 22),
+	Gradient = RGB(186, 176, 168), Shadow = RGB(0, 0, 0), HoveredElement = RGB(58, 44, 38),
+}
+Themes["Slate Light"] = {
+	Background = RGB(238, 241, 246), Tab = RGB(226, 230, 238), Outline = RGB(200, 207, 220), Inline = RGB(250, 251, 253),
+	Text = RGB(36, 42, 56), InactiveText = RGB(128, 138, 158), Accent = RGB(79, 120, 230), Element = RGB(255, 255, 255),
+	Gradient = RGB(214, 220, 232), Shadow = RGB(120, 120, 120), HoveredElement = RGB(232, 238, 250),
+}
+
+for _, theme in Themes do
+	theme.Outline = theme.Outline:Lerp(theme.Text, 0.05)
+end
 local ThemeOrder = {
-	"Blossom", "Afterglow", "Frostbite", "Volt", "Obsidian", "Sakura Drift", "Neon Mirage", "Copper Dust", "Abyss", "Porcelain", "Graphite",
-	"Emerald", "Crimson", "Midnight", "Mocha", "Lavender Haze", "Lagoon", "Monochrome", "Mint Frost", "Rosewater",
+	"Crimson", "Blossom", "Afterglow", "Ember", "Sunset", "Sakura Drift", "Rose Pine", "Neon Mirage", "Obsidian", "Catppuccin",
+	"Dracula", "Tokyo Night", "Midnight", "Lavender Haze", "Nord", "Frostbite", "Abyss", "Aurora", "Lagoon", "Emerald",
+	"Volt", "Gruvbox", "Copper Dust", "Mocha", "Graphite", "Monochrome", "Porcelain", "Slate Light", "Mint Frost", "Rosewater",
 }
 local ThemeKeys = {
 	{ "Background", "Background" }, { "Tab", "Tab" }, { "Outline", "Outline" }, { "Inline", "Inline" },
@@ -149,7 +204,7 @@ local Fonts = {
 local FontOrder = { "Inter", "Builder Sans", "Roboto", "Montserrat", "Source Sans Pro", "Ubuntu", "Nunito", "Arimo" }
 local WeightOrder = { "Regular", "Medium", "SemiBold", "Bold" }
 
-local Current = table.clone(Themes.Crimson)
+local Current = table.clone(Themes["Sakura Drift"])
 local Casing = "Normal"
 local FontFamily = INTER
 local BodyWeight = Enum.FontWeight.SemiBold
@@ -479,6 +534,7 @@ end
 local Shadows = {
 	Large = { Blur = 10, Spread = 0, Transparency = 0.3 },
 	PickerKnob = { Blur = 6, Spread = 6, Transparency = 0.5 },
+	Section = { Blur = 8, Spread = 0, Transparency = 0.8 },
 }
 
 local ShadowsAvailable = pcall(function() Instance.new("UIShadow"):Destroy() end)
@@ -994,10 +1050,9 @@ function Section:Layout(animated)
 	end
 	if any then y -= Metrics.Gap end
 	self.CardH = y + Metrics.Pad
-	local shown = not self.Collapsed
-	self.TotalH = shown and (self.HeaderH + self.CardH) or (Metrics.HeaderH - 8)
-    place(self.Header, "Size", Dim2(1, 0, 0, (shown and self.HeaderH or Metrics.HeaderH) - 8), animated)
-	place(self.Card, "Size", Dim2(1, -2, 0, shown and (self.CardH - 2) or 0), animated)
+	local shellH = self.Collapsed and self.HeaderH or (self.HeaderH + self.CardH - 1)
+	self.TotalH = shellH + 2
+	place(self.Card, "Size", Dim2(1, -2, 0, shellH), animated)
 	if not self.Dragging then place(self.Root, "Size", Dim2(1, 0, 0, self.TotalH), animated) end
 	if self.Column then self.Column:Layout(animated) end
 end
@@ -1005,19 +1060,18 @@ end
 function Section:SetCollapsed(collapsed, animated)
 	if self.Collapsed == collapsed then return end
 	self.Collapsed = collapsed
-	if collapsed then self.Window:CloseFloating() else self.Card.Visible = true end
+	if collapsed then self.Window:CloseFloating() else self.Body.Visible = true end
 	place(self.Chevron.Root, "Rotation", collapsed and -90 or 0, animated, "Smooth")
-    if self.Description then
-	place(self.Description, "TextTransparency", collapsed and 1 or 0, animated, "Fast")
-    end
+	place(self.Patch, "BackgroundTransparency", collapsed and 1 or 0, animated, "Fast")
+	place(self.Rule, "BackgroundTransparency", collapsed and 1 or 0, animated, "Fast")
 	self:Layout(animated)
 	if collapsed then
 		if animated then
 			task.delay(0.4, function()
-				if self.Collapsed then self.Card.Visible = false end
+				if self.Collapsed then self.Body.Visible = false end
 			end)
 		else
-			self.Card.Visible = false
+			self.Body.Visible = false
 		end
 	end
 end
@@ -1456,7 +1510,10 @@ local function buildDropdown(win, parent, options)
 	addGradient(input)
 	local stroke = new("UIStroke", { ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Thickness = 1 }, input)
 	bind(stroke, "Color", function() return dropdown.Open and Current.Accent or Current.Outline end)
-	local value = label(input, { Fg = "InactiveText", TextSize = 13, X = 7, RowH = Metrics.InputH - 2, Right = 8, Truncate = Enum.TextTruncate.AtEnd })
+	local value = label(input, { Fg = "InactiveText", TextSize = 13, X = 7, RowH = Metrics.InputH - 2, Right = 28, Truncate = Enum.TextTruncate.AtEnd })
+	local chevron = makeIcon(input, "chevron", 14, function()
+		return dropdown.Open and Current.Text or Current.InactiveText
+	end, "Element", { AnchorPoint = Vec2(0.5, 0.5), Position = Dim2(1, -15, 0.5, 0) })
 
 	local panel = new("TextButton", { Bg = "Background", BackgroundTransparency = 1, Radius = Metrics.Radius, Visible = false, Size = Offset(10, 0) }, win.Dropdowns)
 	local panelStroke = new("UIStroke", { ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Thickness = 1, Transparency = 1 }, panel)
@@ -1637,6 +1694,8 @@ local function buildDropdown(win, parent, options)
 		if open == dropdown.Open then return end
 		dropdown.Open = open
 		refresh(stroke)
+		chevron.Update()
+		place(chevron.Root, "Rotation", open and 180 or 0, true, "Smooth")
 		local width = input.AbsoluteSize.X / LayerScale
 		if open then
 			if win.OpenDropdown and win.OpenDropdown ~= dropdown then win.OpenDropdown:Toggle(false) end
@@ -1938,34 +1997,67 @@ function Tab:Section(options)
 	local win = self.Window
 	local column = self.Columns[options.Side or 1]
 	local headerH = options.Description and Metrics.HeaderDescH or Metrics.HeaderH
-	local root = new("Frame", { Name = options.Name, Size = Dim2(1, 0, 0, headerH) }, column.Scroll)
-	local header = new("TextButton", { Size = Dim2(1, 0, 0, headerH - 8) }, root)
-	local hovering = false
-	local titleColor = function() return hovering and Current.Text or Current.InactiveText end
-	local icon = makeIcon(header, options.Icon or "cube", 16, titleColor, "Tab")
-	local title = label(header, { Text = options.Name, X = 27, Right = 24, Fg = titleColor, Truncate = Enum.TextTruncate.AtEnd })
-    local description
-    if options.Description then
-	description = label(header, { Fg = "InactiveText", Text = options.Description, TextSize = 11, RowH = 14, Y = 18, Truncate = Enum.TextTruncate.AtEnd })
-    end
-	local fold = new("TextButton", { AnchorPoint = Vec2(1, 0), Position = Dim2(1, 0, 0, 0), Size = Offset(24, Metrics.Row), ZIndex = 2 }, header)
-	local chevron = makeIcon(fold, "chevron", 14, titleColor, "Tab", { AnchorPoint = Vec2(0.5, 0.5), Position = Offset(12, Metrics.Row / 2) })
+	local center = options.Description and 13 or 14
+	local root = new("Frame", { Name = options.Name, Size = Dim2(1, 0, 0, headerH + 2) }, column.Scroll)
 	local section
 	local card = new("Frame", {
-		Bg = "Inline", Active = true, ClipsDescendants = true, Position = Offset(1, headerH + 1), Size = Dim2(1, -2, 0, 0),
+		Bg = "Inline", Active = true, Position = Offset(1, 1), Size = Dim2(1, -2, 0, headerH),
 		Radius = Metrics.CardRadius,
 	}, root)
 	local stroke = new("UIStroke", { ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Thickness = 1 }, card)
 	bind(stroke, "Color", function() return section and section.Dragging and Current.Accent or Current.Outline end)
-	local body = new("Frame", { Position = Offset(Metrics.Pad - 1, -1), Size = Dim2(1, -(Metrics.Pad - 1) * 2, 1, 2) }, card)
-    section = setmetatable({
-	Window = win, Tab = self, Column = column, Name = options.Name, Root = root, Card = card, Body = body,
-	Items = {}, HeaderH = headerH, TotalH = headerH, CardH = 0, Y = 0, Dragging = false, Dropping = false, Title = title,
-	Chevron = chevron, Collapsed = false, Header = header, Description = description,
-    }, Section)
+	addShadow(card, "Section")
+	local clip = new("Frame", { Size = Dim2(1, 0, 1, 0), ClipsDescendants = true }, card)
+	local header = new("TextButton", { Bg = "Element", Size = Dim2(1, 0, 0, headerH), Radius = Metrics.CardRadius }, clip)
+	addGradient(header)
+	local fraction = (headerH - 8) / headerH
+	local patch = new("Frame", { Name = "Patch", Bg = "Element", Position = Offset(0, headerH - 8), Size = Dim2(1, 0, 0, 8) }, header)
+	local patchGradient = Instance.new("UIGradient")
+	patchGradient.Rotation = 90
+	bind(patchGradient, "Color", function()
+		return ColorSequence.new(Color3.new(1, 1, 1):Lerp(Current.Gradient, fraction), Current.Gradient)
+	end)
+	patchGradient.Parent = patch
+	local rule = new("Frame", { Name = "Rule", Bg = "Outline", Position = Offset(0, headerH - 1), Size = Dim2(1, 0, 0, 1) }, header)
+	local hovering = false
+	local titleColor = function()
+		return hovering and Current.Text or Current.Text:Lerp(Current.InactiveText, 0.3)
+	end
+	local arrowColor = function() return hovering and Current.Text or Current.InactiveText end
+	local icon = makeIcon(header, options.Icon or "cube", 16, titleColor, "Element", { Position = Offset(10, center - 8) })
+	local title = label(header, {
+		Text = options.Name, X = 34, Right = 34, Y = center - 8, Fg = titleColor, Truncate = Enum.TextTruncate.AtEnd,
+	})
+	local description
+	if options.Description then
+		description = label(header, {
+			Fg = "InactiveText", Text = options.Description, TextSize = 11, RowH = 14, X = 34, Right = 34, Y = 21,
+			Truncate = Enum.TextTruncate.AtEnd,
+		})
+	end
+	local fold = new("TextButton", { AnchorPoint = Vec2(1, 0), Position = Dim2(1, 0, 0, 0), Size = Offset(30, headerH), ZIndex = 2 }, header)
+	local chevron = makeIcon(fold, "chevron", 14, arrowColor, "Element", { AnchorPoint = Vec2(0.5, 0.5), Position = Offset(15, center) })
+	local body = new("Frame", {
+		Position = Offset(Metrics.Pad - 1, headerH - 1), Size = Dim2(1, -(Metrics.Pad - 1) * 2, 1, -(headerH - 1)),
+	}, clip)
+	section = setmetatable({
+		Window = win, Tab = self, Column = column, Name = options.Name, Root = root, Card = card, Body = body,
+		Items = {}, HeaderH = headerH, TotalH = headerH + 2, CardH = 0, Y = 0, Dragging = false, Dropping = false, Title = title,
+		Chevron = chevron, Collapsed = false, Header = header, Description = description, Patch = patch, Rule = rule,
+	}, Section)
 	table.insert(column.Sections, section)
 	table.insert(win.Sections, section)
-	hoverable(header, function() hovering = true; icon.Update(); chevron.Update(); refresh(title) end, function() hovering = false; icon.Update(); chevron.Update(); refresh(title) end)
+	hoverable(header, function()
+		hovering = true
+		icon.Update()
+		chevron.Update()
+		refresh(title)
+	end, function()
+		hovering = false
+		icon.Update()
+		chevron.Update()
+		refresh(title)
+	end)
 	header.InputBegan:Connect(function(input)
 		trackTouch(input)
 		local kind = input.UserInputType
@@ -3377,16 +3469,6 @@ function Window:BuildSettings(tab)
 		storeAutoload()
 	end })
 
-		local theming = tab:Section({ Name = "Theming", Icon = "palette", Side = 2 })
-	theming:Dropdown({ Name = "Theme", Options = ThemeOrder, Default = self.ThemeName, MaxRows = 11, Early = true, Callback = function(value) self:ApplyTheme(value, self.Restoring) end })
-	theming:Dropdown({ Name = "Casing", Options = Casings, Default = Casing, Callback = function(value) self:SetCasing(value, self.Restoring) end })
-	theming:Divider()
-	for _, pair in ThemeKeys do
-		local key = pair[2]
-		local color = theming:Colorpicker({ Name = pair[1], Default = Current[key], Callback = function(value) self:SetThemeColor(key, value) end })
-		table.insert(self.ThemeRows, { Key = key, Color = color })
-	end
-
 	local menu = tab:Section({ Name = "Menu", Icon = "sliders-horizontal", Side = 2 })
 	local menuBind = menu:Keybind({ Name = "Menu Key", Default = self.MenuKey })
 	menuBind.OnKeyChanged = function() self.MenuKey = menuBind.Key end
@@ -3401,6 +3483,16 @@ function Window:BuildSettings(tab)
 	menu:Dropdown({ Name = "Font", Options = FontOrder, Default = "Inter", Callback = function(value) self:SetFont(value) end })
 	menu:Dropdown({ Name = "Text Weight", Options = WeightOrder, Default = BodyWeight.Name, Callback = function(value) self:SetTextWeight(value) end })
 	menu:Dropdown({ Name = "Notifications", Options = NotifyPlacements, Default = self.NotifyPlacement, Callback = function(value) self:SetNotifyPlacement(value, self.Restoring) end })
+
+	local theming = tab:Section({ Name = "Theming", Icon = "palette", Side = 2 })
+	theming:Dropdown({ Name = "Theme", Options = ThemeOrder, Default = self.ThemeName, MaxRows = 11, Early = true, Callback = function(value) self:ApplyTheme(value, self.Restoring) end })
+	theming:Dropdown({ Name = "Casing", Options = Casings, Default = Casing, Callback = function(value) self:SetCasing(value, self.Restoring) end })
+	theming:Divider()
+	for _, pair in ThemeKeys do
+		local key = pair[2]
+		local color = theming:Colorpicker({ Name = pair[1], Default = Current[key], Callback = function(value) self:SetThemeColor(key, value) end })
+		table.insert(self.ThemeRows, { Key = key, Color = color })
+	end
 
 	if saved then
 		task.defer(function()
@@ -3587,7 +3679,7 @@ end
 local function headerButton(parent, iconName, x, hoverColor)
 	local hovering = false
 	local button = new("TextButton", {
-		Position = Offset(x, 4), Size = Offset(18, 18), Radius = Metrics.Radius, BackgroundTransparency = 0,
+		Position = Offset(x, 3), Size = Offset(18, 18), Radius = Metrics.Radius, BackgroundTransparency = 0,
 	}, parent)
 	bind(button, "BackgroundColor3", function() return hovering and Current.Inline or Current.Tab end)
 	local icon = makeIcon(button, iconName, 14, function()
@@ -3754,7 +3846,7 @@ function Blossom.new(options)
 	local globalEnv = typeof(getgenv) == "function" and getgenv() or nil
 	local previous = LastWindow or (globalEnv and globalEnv.__BlossomWindow)
 	if previous then pcall(previous.Destroy, previous) end
-	local themeName = Themes[options.Theme] and options.Theme or "Crimson"
+	local themeName = Themes[options.Theme] and options.Theme or "Sakura Drift"
 	for key, value in Themes[themeName] do Current[key] = value end
 	if options.Font then FontFamily = Fonts[options.Font] or options.Font end
 	if options.Lucide ~= nil then setLucide(options.Lucide) end
@@ -3816,6 +3908,10 @@ function Blossom.new(options)
 		Name = "Pages", Position = Offset(0, Metrics.TopBar), Size = Dim2(1, 0, 1, -(Metrics.TopBar + Metrics.Pad)), ClipsDescendants = true,
 	}, content)
 	win.Veil = new("Frame", { Bg = "Tab", BackgroundTransparency = 1, Size = Dim2(1, 0, 1, 0), ZIndex = 5 }, win.Pages)
+	win.HeaderLine = new("Frame", {
+		Name = "HeaderLine", Bg = "Outline",
+		Position = Offset(Metrics.Pad, Metrics.LineY), Size = Dim2(1, -Metrics.Pad * 2, 0, 1), ZIndex = 2,
+	}, content)
 	local controls = new("Frame", {
 		Name = "Controls", AnchorPoint = Vec2(1, 0), Position = Dim2(1, -Metrics.Pad, 0, 0), Size = Offset(62, Metrics.TopBar), ZIndex = 3,
 	}, root)
