@@ -127,7 +127,7 @@ local Themes = {
 	},
 }
 for _, theme in Themes do
-	theme.Outline = theme.Outline:Lerp(theme.Text, 0.3)
+	theme.Outline = theme.Outline:Lerp(theme.Text, 0.1)
 end
 local ThemeOrder = {
 	"Blossom", "Afterglow", "Frostbite", "Volt", "Obsidian", "Sakura Drift", "Neon Mirage", "Copper Dust", "Abyss", "Porcelain", "Graphite",
