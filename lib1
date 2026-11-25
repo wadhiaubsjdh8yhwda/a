@@ -3816,6 +3816,10 @@ function Blossom.new(options)
 		Name = "Pages", Position = Offset(0, Metrics.TopBar), Size = Dim2(1, 0, 1, -(Metrics.TopBar + Metrics.Pad)), ClipsDescendants = true,
 	}, content)
 	win.Veil = new("Frame", { Bg = "Tab", BackgroundTransparency = 1, Size = Dim2(1, 0, 1, 0), ZIndex = 5 }, win.Pages)
+	win.HeaderLine = new("Frame", {
+	Name = "HeaderLine", Bg = "Outline",
+	Position = Offset(0, Metrics.TopBar - 1), Size = Dim2(1, 0, 0, 1), ZIndex = 2,
+}, content)
 	local controls = new("Frame", {
 		Name = "Controls", AnchorPoint = Vec2(1, 0), Position = Dim2(1, -Metrics.Pad, 0, 0), Size = Offset(62, Metrics.TopBar), ZIndex = 3,
 	}, root)
