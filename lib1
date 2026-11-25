@@ -126,7 +126,9 @@ local Themes = {
 		Gradient = RGB(224, 210, 215), Shadow = RGB(120, 120, 120), HoveredElement = RGB(250, 236, 240),
 	},
 }
-
+for _, theme in Themes do
+	theme.Outline = theme.Outline:Lerp(theme.Text, 0.05)
+end
 local ThemeOrder = {
 	"Blossom", "Afterglow", "Frostbite", "Volt", "Obsidian", "Sakura Drift", "Neon Mirage", "Copper Dust", "Abyss", "Porcelain", "Graphite",
 	"Emerald", "Crimson", "Midnight", "Mocha", "Lavender Haze", "Lagoon", "Monochrome", "Mint Frost", "Rosewater",
@@ -149,8 +151,6 @@ local Fonts = {
 }
 local FontOrder = { "Inter", "Builder Sans", "Roboto", "Montserrat", "Source Sans Pro", "Ubuntu", "Nunito", "Arimo" }
 local WeightOrder = { "Regular", "Medium", "SemiBold", "Bold" }
-local BorderStrength = 0.35
-local BorderThickness = 2
 
 local Current = table.clone(Themes.Crimson)
 local Casing = "Normal"
@@ -2390,16 +2390,6 @@ function Window:SetTextWeight(name)
 	applyTextSettings()
 end
 
-function Window:SetBorderStrength(value)
-	BorderStrength = value / 100
-	refresh(self.RootStroke, false)
-end
-
-function Window:SetBorderThickness(value)
-	BorderThickness = value
-	self.RootStroke.Thickness = value
-end
-
 function Window:CloseFloating()
 	if self.OpenDropdown then self.OpenDropdown:Toggle(false) end
 	self:ClosePopup()
@@ -3430,8 +3420,6 @@ function Window:BuildSettings(tab)
 		local theming = tab:Section({ Name = "Theming", Icon = "palette", Side = 2 })
 	theming:Dropdown({ Name = "Theme", Options = ThemeOrder, Default = self.ThemeName, MaxRows = 11, Early = true, Callback = function(value) self:ApplyTheme(value, self.Restoring) end })
 	theming:Dropdown({ Name = "Casing", Options = Casings, Default = Casing, Callback = function(value) self:SetCasing(value, self.Restoring) end })
-	theming:Slider({ Name = "Border Strength", Min = 0, Max = 100, Default = 35, Suffix = "%", Callback = function(value) self:SetBorderStrength(value) end })
-	theming:Slider({ Name = "Border Thickness", Min = 1, Max = 4, Default = 2, Callback = function(value) self:SetBorderThickness(value) end })
 	theming:Divider()
 	for _, pair in ThemeKeys do
 		local key = pair[2]
@@ -3838,13 +3826,7 @@ function Blossom.new(options)
 	}, screen)
 	win.Holder = holder
 	win.Scale = new("UIScale", { Scale = 0.97 })
-	local root = new("Frame", { Bg = "Background", Active = true, Size = Dim2(1, 0, 1, 0), Radius = Metrics.WindowRadius }, holder)
-	local rootStroke = Instance.new("UIStroke")
-	rootStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	rootStroke.Thickness = BorderThickness
-	bind(rootStroke, "Color", function() return Current.Outline:Lerp(Current.Text, BorderStrength) end)
-	rootStroke.Parent = root
-	win.RootStroke = rootStroke
+	local root = new("Frame", { Bg = "Background", Active = true, Size = Dim2(1, 0, 1, 0), Radius = Metrics.WindowRadius, Border = "Outline" }, holder)
 	addShadow(root, "Large")
 	win.Root = root
 	win.Fader = newFader(holder)
