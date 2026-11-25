@@ -17,7 +17,7 @@ local Metrics = {
 	Radius = 3, SmallRadius = 2, CardRadius = 4, PillRadius = 5, PopupRadius = 5, FloatRadius = 6, WindowRadius = 6,
 	WindowW = 586, WindowH = 466, MinWindowW = 520, MinWindowH = 380, SidebarW = 141, ContentX = 142, ColumnW = 207,
 	TabW = 121, TabH = 28, TabPitch = 32, CategoryToTab = 25, TabToCategory = 25, FirstCategory = 56, SearchH = 28,
-	Row = 16, TopBar = 26, HeaderH = 24, HeaderDescH = 40,
+	Row = 16, TopBar = 32, LineY = 24, HeaderH = 24, HeaderDescH = 40,
 	DividerH = 9, SliderH = 33, DropdownH = 47, InputH = 26, ButtonH = 28, ListRowH = 24,
 	ToggleW = 28, ToggleH = 16, ToggleKnob = 10, Knob = 11, PickerKnob = 8, TrackH = 9, TrackY = 24, TrackInset = 5,
 	ChipH = 16, ValueChipH = 17, Swatch = 14, ChipGap = 2,
@@ -3587,7 +3587,7 @@ end
 local function headerButton(parent, iconName, x, hoverColor)
 	local hovering = false
 	local button = new("TextButton", {
-		Position = Offset(x, 4), Size = Offset(18, 18), Radius = Metrics.Radius, BackgroundTransparency = 0,
+		Position = Offset(x, 3), Size = Offset(18, 18), Radius = Metrics.Radius, BackgroundTransparency = 0,
 	}, parent)
 	bind(button, "BackgroundColor3", function() return hovering and Current.Inline or Current.Tab end)
 	local icon = makeIcon(button, iconName, 14, function()
@@ -3817,30 +3817,30 @@ function Blossom.new(options)
 	}, content)
 	win.Veil = new("Frame", { Bg = "Tab", BackgroundTransparency = 1, Size = Dim2(1, 0, 1, 0), ZIndex = 5 }, win.Pages)
 	win.HeaderLine = new("Frame", {
-	Name = "HeaderLine", Bg = "Outline",
-	Position = Offset(Metrics.Pad, Metrics.TopBar - 1), Size = Dim2(1, -Metrics.Pad * 2, 0, 1), ZIndex = 2,
-}, content)
-new("UIGradient", {
-	Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.15, 0.2),
-		NumberSequenceKeypoint.new(0.85, 0.2),
-		NumberSequenceKeypoint.new(1, 1),
-	}),
-}, win.HeaderLine)
+		Name = "HeaderLine", Bg = "Outline",
+		Position = Offset(Metrics.Pad, Metrics.LineY), Size = Dim2(1, -Metrics.Pad * 2, 0, 1), ZIndex = 2,
+	}, content)
+	new("UIGradient", {
+		Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 1),
+			NumberSequenceKeypoint.new(0.12, 0.35),
+			NumberSequenceKeypoint.new(0.88, 0.35),
+			NumberSequenceKeypoint.new(1, 1),
+		}),
+	}, win.HeaderLine)
 
-win.HeaderAccent = new("Frame", {
-	Name = "HeaderAccent", Bg = "Accent",
-	AnchorPoint = Vec2(1, 0), Position = Dim2(1, -Metrics.Pad, 0, Metrics.TopBar - 1), Size = Offset(96, 1), ZIndex = 3,
-}, content)
-new("UIGradient", {
-	Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.4, 0.35),
-		NumberSequenceKeypoint.new(0.8, 0.35),
-		NumberSequenceKeypoint.new(1, 1),
-	}),
-}, win.HeaderAccent)
+	win.HeaderAccent = new("Frame", {
+		Name = "HeaderAccent", Bg = "Accent",
+		AnchorPoint = Vec2(1, 0), Position = Dim2(1, -Metrics.Pad, 0, Metrics.LineY), Size = Offset(150, 1), ZIndex = 3,
+	}, content)
+	new("UIGradient", {
+		Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 1),
+			NumberSequenceKeypoint.new(0.45, 0.25),
+			NumberSequenceKeypoint.new(0.85, 0.25),
+			NumberSequenceKeypoint.new(1, 1),
+		}),
+	}, win.HeaderAccent)
 	local controls = new("Frame", {
 		Name = "Controls", AnchorPoint = Vec2(1, 0), Position = Dim2(1, -Metrics.Pad, 0, 0), Size = Offset(62, Metrics.TopBar), ZIndex = 3,
 	}, root)
