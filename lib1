@@ -17,7 +17,7 @@ local Metrics = {
 	Radius = 3, SmallRadius = 2, CardRadius = 4, PillRadius = 5, PopupRadius = 5, FloatRadius = 6, WindowRadius = 6,
 	WindowW = 586, WindowH = 466, MinWindowW = 520, MinWindowH = 380, SidebarW = 141, ContentX = 142, ColumnW = 207,
 	TabW = 121, TabH = 28, TabPitch = 32, CategoryToTab = 25, TabToCategory = 25, FirstCategory = 56, SearchH = 28,
-	Row = 16, TopBar = 32, LineY = 24, HeaderH = 24, HeaderDescH = 40,
+	Row = 16, TopBar = 32, LineY = 24, HeaderH = 28, HeaderDescH = 42,
 	DividerH = 9, SliderH = 33, DropdownH = 47, InputH = 26, ButtonH = 28, ListRowH = 24,
 	ToggleW = 28, ToggleH = 16, ToggleKnob = 10, Knob = 11, PickerKnob = 8, TrackH = 9, TrackY = 24, TrackInset = 5,
 	ChipH = 16, ValueChipH = 17, Swatch = 14, ChipGap = 2,
@@ -479,6 +479,7 @@ end
 local Shadows = {
 	Large = { Blur = 10, Spread = 0, Transparency = 0.3 },
 	PickerKnob = { Blur = 6, Spread = 6, Transparency = 0.5 },
+	Section = { Blur = 8, Spread = 0, Transparency = 0.8 },
 }
 
 local ShadowsAvailable = pcall(function() Instance.new("UIShadow"):Destroy() end)
@@ -994,10 +995,9 @@ function Section:Layout(animated)
 	end
 	if any then y -= Metrics.Gap end
 	self.CardH = y + Metrics.Pad
-	local shown = not self.Collapsed
-	self.TotalH = shown and (self.HeaderH + self.CardH) or (Metrics.HeaderH - 8)
-    place(self.Header, "Size", Dim2(1, 0, 0, (shown and self.HeaderH or Metrics.HeaderH) - 8), animated)
-	place(self.Card, "Size", Dim2(1, -2, 0, shown and (self.CardH - 2) or 0), animated)
+	local shellH = self.Collapsed and self.HeaderH or (self.HeaderH + self.CardH - 1)
+	self.TotalH = shellH + 2
+	place(self.Card, "Size", Dim2(1, -2, 0, shellH), animated)
 	if not self.Dragging then place(self.Root, "Size", Dim2(1, 0, 0, self.TotalH), animated) end
 	if self.Column then self.Column:Layout(animated) end
 end
@@ -1005,19 +1005,18 @@ end
 function Section:SetCollapsed(collapsed, animated)
 	if self.Collapsed == collapsed then return end
 	self.Collapsed = collapsed
-	if collapsed then self.Window:CloseFloating() else self.Card.Visible = true end
+	if collapsed then self.Window:CloseFloating() else self.Body.Visible = true end
 	place(self.Chevron.Root, "Rotation", collapsed and -90 or 0, animated, "Smooth")
-    if self.Description then
-	place(self.Description, "TextTransparency", collapsed and 1 or 0, animated, "Fast")
-    end
+	place(self.Patch, "BackgroundTransparency", collapsed and 1 or 0, animated, "Fast")
+	place(self.Rule, "BackgroundTransparency", collapsed and 1 or 0, animated, "Fast")
 	self:Layout(animated)
 	if collapsed then
 		if animated then
 			task.delay(0.4, function()
-				if self.Collapsed then self.Card.Visible = false end
+				if self.Collapsed then self.Body.Visible = false end
 			end)
 		else
-			self.Card.Visible = false
+			self.Body.Visible = false
 		end
 	end
 end
@@ -1938,34 +1937,67 @@ function Tab:Section(options)
 	local win = self.Window
 	local column = self.Columns[options.Side or 1]
 	local headerH = options.Description and Metrics.HeaderDescH or Metrics.HeaderH
-	local root = new("Frame", { Name = options.Name, Size = Dim2(1, 0, 0, headerH) }, column.Scroll)
-	local header = new("TextButton", { Size = Dim2(1, 0, 0, headerH - 8) }, root)
-	local hovering = false
-	local titleColor = function() return hovering and Current.Text or Current.InactiveText end
-	local icon = makeIcon(header, options.Icon or "cube", 16, titleColor, "Tab")
-	local title = label(header, { Text = options.Name, X = 27, Right = 24, Fg = titleColor, Truncate = Enum.TextTruncate.AtEnd })
-    local description
-    if options.Description then
-	description = label(header, { Fg = "InactiveText", Text = options.Description, TextSize = 11, RowH = 14, Y = 18, Truncate = Enum.TextTruncate.AtEnd })
-    end
-	local fold = new("TextButton", { AnchorPoint = Vec2(1, 0), Position = Dim2(1, 0, 0, 0), Size = Offset(24, Metrics.Row), ZIndex = 2 }, header)
-	local chevron = makeIcon(fold, "chevron", 14, titleColor, "Tab", { AnchorPoint = Vec2(0.5, 0.5), Position = Offset(12, Metrics.Row / 2) })
+	local center = options.Description and 13 or 14
+	local root = new("Frame", { Name = options.Name, Size = Dim2(1, 0, 0, headerH + 2) }, column.Scroll)
 	local section
 	local card = new("Frame", {
-		Bg = "Inline", Active = true, ClipsDescendants = true, Position = Offset(1, headerH + 1), Size = Dim2(1, -2, 0, 0),
+		Bg = "Inline", Active = true, Position = Offset(1, 1), Size = Dim2(1, -2, 0, headerH),
 		Radius = Metrics.CardRadius,
 	}, root)
 	local stroke = new("UIStroke", { ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Thickness = 1 }, card)
 	bind(stroke, "Color", function() return section and section.Dragging and Current.Accent or Current.Outline end)
-	local body = new("Frame", { Position = Offset(Metrics.Pad - 1, -1), Size = Dim2(1, -(Metrics.Pad - 1) * 2, 1, 2) }, card)
-    section = setmetatable({
-	Window = win, Tab = self, Column = column, Name = options.Name, Root = root, Card = card, Body = body,
-	Items = {}, HeaderH = headerH, TotalH = headerH, CardH = 0, Y = 0, Dragging = false, Dropping = false, Title = title,
-	Chevron = chevron, Collapsed = false, Header = header, Description = description,
-    }, Section)
+	addShadow(card, "Section")
+	local clip = new("Frame", { Size = Dim2(1, 0, 1, 0), ClipsDescendants = true }, card)
+	local header = new("TextButton", { Bg = "Element", Size = Dim2(1, 0, 0, headerH), Radius = Metrics.CardRadius }, clip)
+	addGradient(header)
+	local fraction = (headerH - 8) / headerH
+	local patch = new("Frame", { Name = "Patch", Bg = "Element", Position = Offset(0, headerH - 8), Size = Dim2(1, 0, 0, 8) }, header)
+	local patchGradient = Instance.new("UIGradient")
+	patchGradient.Rotation = 90
+	bind(patchGradient, "Color", function()
+		return ColorSequence.new(Color3.new(1, 1, 1):Lerp(Current.Gradient, fraction), Current.Gradient)
+	end)
+	patchGradient.Parent = patch
+	local rule = new("Frame", { Name = "Rule", Bg = "Outline", Position = Offset(0, headerH - 1), Size = Dim2(1, 0, 0, 1) }, header)
+	local hovering = false
+	local titleColor = function()
+		return hovering and Current.Text or Current.Text:Lerp(Current.InactiveText, 0.3)
+	end
+	local arrowColor = function() return hovering and Current.Text or Current.InactiveText end
+	local icon = makeIcon(header, options.Icon or "cube", 16, titleColor, "Element", { Position = Offset(10, center - 8) })
+	local title = label(header, {
+		Text = options.Name, X = 34, Right = 34, Y = center - 8, Fg = titleColor, Truncate = Enum.TextTruncate.AtEnd,
+	})
+	local description
+	if options.Description then
+		description = label(header, {
+			Fg = "InactiveText", Text = options.Description, TextSize = 11, RowH = 14, X = 34, Right = 34, Y = 21,
+			Truncate = Enum.TextTruncate.AtEnd,
+		})
+	end
+	local fold = new("TextButton", { AnchorPoint = Vec2(1, 0), Position = Dim2(1, 0, 0, 0), Size = Offset(30, headerH), ZIndex = 2 }, header)
+	local chevron = makeIcon(fold, "chevron", 14, arrowColor, "Element", { AnchorPoint = Vec2(0.5, 0.5), Position = Offset(15, center) })
+	local body = new("Frame", {
+		Position = Offset(Metrics.Pad - 1, headerH - 1), Size = Dim2(1, -(Metrics.Pad - 1) * 2, 1, -(headerH - 1)),
+	}, clip)
+	section = setmetatable({
+		Window = win, Tab = self, Column = column, Name = options.Name, Root = root, Card = card, Body = body,
+		Items = {}, HeaderH = headerH, TotalH = headerH + 2, CardH = 0, Y = 0, Dragging = false, Dropping = false, Title = title,
+		Chevron = chevron, Collapsed = false, Header = header, Description = description, Patch = patch, Rule = rule,
+	}, Section)
 	table.insert(column.Sections, section)
 	table.insert(win.Sections, section)
-	hoverable(header, function() hovering = true; icon.Update(); chevron.Update(); refresh(title) end, function() hovering = false; icon.Update(); chevron.Update(); refresh(title) end)
+	hoverable(header, function()
+		hovering = true
+		icon.Update()
+		chevron.Update()
+		refresh(title)
+	end, function()
+		hovering = false
+		icon.Update()
+		chevron.Update()
+		refresh(title)
+	end)
 	header.InputBegan:Connect(function(input)
 		trackTouch(input)
 		local kind = input.UserInputType
