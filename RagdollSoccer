@@ -28,16 +28,29 @@ if getgenv().MystrixHub then
     task.wait(0.2)
 end
 
-local CURRENT_VERSION = "v1.1.8"
+local CURRENT_VERSION = "v1.1.88"
 local DISCORD_INVITE = "46JkThWjPB"
 
 local Services = setmetatable({}, {
     __index = function(self, Index)
-        local service = cloneref(game:GetService(Index))
-        rawset(self, Index, service)
-        return service
+        local ok, service = pcall(game.GetService, game, Index)
+        if not ok or service == nil then
+            ok, service = pcall(function() return game:FindService(Index) end)
+        end
+        if not ok or service == nil then
+            ok, service = pcall(function() return game[Index] end)
+        end
+        if not ok or service == nil then return nil end
+        local wrapped = service
+        pcall(function() wrapped = cloneref(service) end)
+        rawset(self, Index, wrapped)
+        return wrapped
     end
 })
+
+for _, name in ipairs({ "Players", "RunService", "ReplicatedStorage", "CollectionService", "UserInputService", "ProximityPromptService", "MarketplaceService" }) do
+    local _ = Services[name]
+end
 
 local Players = Services.Players
 local RunService = Services.RunService
@@ -946,7 +959,10 @@ getgenv().MystrixAutoPickup = getgenv().MystrixAutoPickup or { Enabled = false, 
 function MystrixHub.Functions.GetBall()
     local ball = MystrixHub.BallRef
     if ball and ball.Parent then return ball end
-    ball = Services.CollectionService:GetTagged("SoccerBall")[1]
+    local cs = Services.CollectionService
+    if not cs then return nil end
+    local ok, list = pcall(cs.GetTagged, cs, "SoccerBall")
+    ball = ok and list[1] or nil
     MystrixHub.BallRef = ball
     return ball
 end
@@ -4294,24 +4310,31 @@ end
 function MystrixHub.Functions.InstallPlanSync()
     local SA = getgenv().MystrixSilentAim
     if SA.PlanHooked then return true end
-    if hookmetamethod and getnamecallmethod and setnamecallmethod then
+    local getMethod, setMethod = getnamecallmethod, setnamecallmethod
+    if hookmetamethod and getMethod and setMethod then
         local ok = pcall(function()
             local old
             old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-                if getgenv().MystrixSilentAim.Enabled and getnamecallmethod() == "FireServer" then
-                    local copy = nil
-                    local H = getgenv().MystrixHub
-                    local FF = H and H.Functions
-                    if FF then
-                        copy = FF.PlanSyncCopy((...))
-                    end
-                    setnamecallmethod("FireServer")
-                    if copy then
-                        return old(self, copy, select(2, ...))
-                    end
+                local method = getMethod()
+                if method ~= "FireServer" then
+                    setMethod(method)
+                    return old(self, ...)
+                end
+                local H = getgenv().MystrixHub
+                local FF = H and H.Functions
+                local on = getgenv().MystrixSilentAim.Enabled
+                if not (FF and on) then
+                    setMethod(method)
+                    return old(self, ...)
+                end
+                local okc, copy = pcall(FF.PlanSyncCopy, (...))
+                setMethod(method)
+                if okc and copy then
+                    return old(self, copy, select(2, ...))
                 end
                 return old(self, ...)
             end))
+            if type(old) ~= "function" then error("no original") end
         end)
         if ok then
             SA.PlanHooked = true
@@ -4323,19 +4346,17 @@ function MystrixHub.Functions.InstallPlanSync()
             local fire = Instance.new("RemoteEvent").FireServer
             local old
             old = hookfunction(fire, newcclosure(function(self, ...)
-                if getgenv().MystrixSilentAim.Enabled then
-                    local H = getgenv().MystrixHub
-                    local FF = H and H.Functions
-                    local copy = FF and FF.PlanSyncCopy((...))
-                    if copy then
+                local H = getgenv().MystrixHub
+                local FF = H and H.Functions
+                if FF and getgenv().MystrixSilentAim.Enabled then
+                    local okc, copy = pcall(FF.PlanSyncCopy, (...))
+                    if okc and copy then
                         return old(self, copy, select(2, ...))
                     end
                 end
                 return old(self, ...)
             end))
-            if type(old) ~= "function" then
-                error("no original")
-            end
+            if type(old) ~= "function" then error("no original") end
         end)
         if ok then
             SA.PlanHooked = true
