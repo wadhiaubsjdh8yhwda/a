@@ -3818,8 +3818,29 @@ function Blossom.new(options)
 	win.Veil = new("Frame", { Bg = "Tab", BackgroundTransparency = 1, Size = Dim2(1, 0, 1, 0), ZIndex = 5 }, win.Pages)
 	win.HeaderLine = new("Frame", {
 	Name = "HeaderLine", Bg = "Outline",
-	Position = Offset(0, Metrics.TopBar - 1), Size = Dim2(1, 0, 0, 1), ZIndex = 2,
+	Position = Offset(Metrics.Pad, Metrics.TopBar - 1), Size = Dim2(1, -Metrics.Pad * 2, 0, 1), ZIndex = 2,
 }, content)
+new("UIGradient", {
+	Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.15, 0.2),
+		NumberSequenceKeypoint.new(0.85, 0.2),
+		NumberSequenceKeypoint.new(1, 1),
+	}),
+}, win.HeaderLine)
+
+win.HeaderAccent = new("Frame", {
+	Name = "HeaderAccent", Bg = "Accent",
+	AnchorPoint = Vec2(1, 0), Position = Dim2(1, -Metrics.Pad, 0, Metrics.TopBar - 1), Size = Offset(96, 1), ZIndex = 3,
+}, content)
+new("UIGradient", {
+	Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.4, 0.35),
+		NumberSequenceKeypoint.new(0.8, 0.35),
+		NumberSequenceKeypoint.new(1, 1),
+	}),
+}, win.HeaderAccent)
 	local controls = new("Frame", {
 		Name = "Controls", AnchorPoint = Vec2(1, 0), Position = Dim2(1, -Metrics.Pad, 0, 0), Size = Offset(62, Metrics.TopBar), ZIndex = 3,
 	}, root)
