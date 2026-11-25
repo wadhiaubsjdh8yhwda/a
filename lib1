@@ -126,6 +126,9 @@ local Themes = {
 		Gradient = RGB(224, 210, 215), Shadow = RGB(120, 120, 120), HoveredElement = RGB(250, 236, 240),
 	},
 }
+for _, theme in Themes do
+	theme.Outline = theme.Outline:Lerp(theme.Text, 0.3)
+end
 local ThemeOrder = {
 	"Blossom", "Afterglow", "Frostbite", "Volt", "Obsidian", "Sakura Drift", "Neon Mirage", "Copper Dust", "Abyss", "Porcelain", "Graphite",
 	"Emerald", "Crimson", "Midnight", "Mocha", "Lavender Haze", "Lagoon", "Monochrome", "Mint Frost", "Rosewater",
@@ -3857,27 +3860,6 @@ function Blossom.new(options)
 		Name = "HeaderLine", Bg = "Outline",
 		Position = Offset(Metrics.Pad, Metrics.LineY), Size = Dim2(1, -Metrics.Pad * 2, 0, 1), ZIndex = 2,
 	}, content)
-	new("UIGradient", {
-		Transparency = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 1),
-			NumberSequenceKeypoint.new(0.12, 0.35),
-			NumberSequenceKeypoint.new(0.88, 0.35),
-			NumberSequenceKeypoint.new(1, 1),
-		}),
-	}, win.HeaderLine)
-
-	win.HeaderAccent = new("Frame", {
-		Name = "HeaderAccent", Bg = "Accent",
-		AnchorPoint = Vec2(1, 0), Position = Dim2(1, -Metrics.Pad, 0, Metrics.LineY), Size = Offset(150, 1), ZIndex = 3,
-	}, content)
-	new("UIGradient", {
-		Transparency = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 1),
-			NumberSequenceKeypoint.new(0.45, 0.25),
-			NumberSequenceKeypoint.new(0.85, 0.25),
-			NumberSequenceKeypoint.new(1, 1),
-		}),
-	}, win.HeaderAccent)
 	local controls = new("Frame", {
 		Name = "Controls", AnchorPoint = Vec2(1, 0), Position = Dim2(1, -Metrics.Pad, 0, 0), Size = Offset(62, Metrics.TopBar), ZIndex = 3,
 	}, root)
