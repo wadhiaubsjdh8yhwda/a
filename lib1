@@ -10,6 +10,7 @@ local Offset = UDim2.fromOffset
 local RGB = Color3.fromRGB
 local floor, round = math.floor, math.round
 local FULL = 99
+local Focus
 
 
 local Metrics = {
@@ -477,76 +478,59 @@ end
 
 function Localization.Http(url)
 	local sender = (typeof(request) == "function" and request) or (typeof(http_request) == "function" and http_request)
-		or (typeof(syn) == "table" and syn.request)
+		or (typeof(syn) == "table" and typeof(syn.request) == "function" and syn.request)
+		or (typeof(http) == "table" and typeof(http.request) == "function" and http.request)
 	if sender then
-		local ok, res = pcall(sender, { Url = url, Method = "GET" })
-		local status = ok and type(res) == "table" and tonumber(res.StatusCode) or 0
-		if status >= 200 and status < 300 and type(res.Body) == "string" then return res.Body end
+		local ok, res = pcall(sender, { Url = url, Method = "GET", Headers = { ["User-Agent"] = "Mozilla/5.0" } })
+		if ok and type(res) == "table" and type(res.Body) == "string" then
+			local status = tonumber(res.StatusCode)
+			if res.Success == true or (status and status >= 200 and status < 300) then return res.Body end
+		end
 	end
 	local ok, body = pcall(function() return game:HttpGet(url) end)
-	if ok and type(body) == "string" then return body end
+	if ok and type(body) == "string" and body ~= "" then return body end
+	ok, body = pcall(function() return HttpService:GetAsync(url) end)
+	if ok and type(body) == "string" and body ~= "" then return body end
 	return nil
 end
 
-function Localization.Fetch(text, code)
-	local url = "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&ie=UTF-8&oe=UTF-8&sl=auto&tl="
-		.. HttpService:UrlEncode(code) .. "&q=" .. HttpService:UrlEncode(text)
-	local body = Localization.Http(url)
-	if not body or string.sub(body, 1, 1) ~= "[" then return nil end
-	local ok, data = pcall(function() return HttpService:JSONDecode(body) end)
-	if not ok or type(data) ~= "table" or type(data[1]) ~= "table" then return nil end
-	local pieces = {}
-	for _, segment in ipairs(data[1]) do
-		if type(segment) == "table" and type(segment[1]) == "string" then table.insert(pieces, segment[1]) end
-	end
-	return table.concat(pieces)
-end
+Localization.Hosts = { "translate.googleapis.com", "clients5.google.com", "translate.google.com" }
 
-function Localization.Batch(items, code)
-	local parts = {}
-	for index, text in ipairs(items) do
-		table.insert(parts, string.format("ZXQB%06dQXZ\n%s\n", index, text))
+function Localization.Fetch(text, code)
+	local query = "/translate_a/single?client=gtx&dt=t&ie=UTF-8&oe=UTF-8&sl=auto&tl="
+		.. HttpService:UrlEncode(code) .. "&q=" .. HttpService:UrlEncode(text)
+	for _, host in ipairs(Localization.Hosts) do
+		local body = Localization.Http("https://" .. host .. query)
+		if body and string.sub(body, 1, 1) == "[" then
+			local ok, data = pcall(function() return HttpService:JSONDecode(body) end)
+			if ok and type(data) == "table" and type(data[1]) == "table" then
+				local pieces = {}
+				for _, segment in ipairs(data[1]) do
+					if type(segment) == "table" and type(segment[1]) == "string" then table.insert(pieces, segment[1]) end
+				end
+				local joined = table.concat(pieces)
+				if joined ~= "" then return joined end
+			end
+		end
 	end
-	table.insert(parts, "ZXQENDQXZ")
-	local output = Localization.Fetch(table.concat(parts), code)
-	if not output then return nil end
-	local starts, ends, cursor = {}, {}, 1
-	for index = 1, #items do
-		local first, last = string.find(output, string.format("ZXQB%06dQXZ", index), cursor, true)
-		if not first then return nil end
-		starts[index], ends[index], cursor = first, last, last + 1
-	end
-	local finish = string.find(output, "ZXQENDQXZ", cursor, true)
-	if not finish then return nil end
-	local result = {}
-	for index = 1, #items do
-		local value = string.sub(output, ends[index] + 1, (starts[index + 1] or finish) - 1)
-		value = string.match(value, "^%s*(.-)%s*$")
-		if value == "" or string.find(value, "ZXQ", 1, true) then return nil end
-		result[index] = value
-	end
-	return result
+	return nil
 end
 
 function Localization.Solve(items, code)
-	local result = Localization.Batch(items, code)
-	if result then return result end
-	if #items == 1 then
-		local value = Localization.Fetch(items[1], code)
-		value = value and string.match(value, "^%s*(.-)%s*$")
-		if value and value ~= "" and not string.find(value, "ZXQ", 1, true) then return { value } end
-		return nil
+	local result, remaining = {}, #items
+	for index, text in ipairs(items) do
+		task.spawn(function()
+			local ok, value = pcall(Localization.Fetch, text, code)
+			if ok and type(value) == "string" then
+				value = string.match(value, "^%s*(.-)%s*$")
+				if value ~= "" then result[index] = value end
+			end
+			remaining -= 1
+		end)
 	end
-	local middle = math.floor(#items / 2)
-	local left, right = {}, {}
-	for index, text in ipairs(items) do table.insert(index <= middle and left or right, text) end
-	local a = Localization.Solve(left, code)
-	local b = Localization.Solve(right, code)
-	if not a and not b then return nil end
-	local merged = {}
-	for index = 1, #left do merged[index] = a and a[index] or nil end
-	for index = 1, #right do merged[middle + index] = b and b[index] or nil end
-	return merged
+	local started = os.clock()
+	while remaining > 0 and os.clock() - started < 20 do task.wait(0.05) end
+	return result
 end
 
 function Localization.Refresh()
@@ -564,21 +548,20 @@ function Localization.Kick()
 	task.spawn(function()
 		while next(Localization.Pending) do
 			local code = Localization.Code
-			local items, size = {}, 0
+			local items = {}
 			for text in Localization.Pending do
 				Localization.Pending[text] = nil
 				Localization.InFlight[text] = true
 				table.insert(items, text)
-				size += #text
-				if #items >= 30 or size > 1500 then break end
+				if #items >= 8 then break end
 			end
 			local ok, result = pcall(Localization.Solve, items, code)
-			if not ok then result = nil end
+			if not ok then result = {} end
 			local store = Localization.Cache[code]
 			if not store then store = {}; Localization.Cache[code] = store end
 			local failed = false
 			for index, text in ipairs(items) do
-				local value = result and result[index]
+				local value = result[index]
 				if value then
 					store[text] = value
 				else
@@ -588,16 +571,13 @@ function Localization.Kick()
 				Localization.InFlight[text] = nil
 			end
 			Localization.Refresh()
-			if Localization.SaveSoon then Localization.SaveSoon() end
+			Localization.SaveSoon()
 			if failed and not Localization.Warned then
 				Localization.Warned = true
-				if Focus then Focus:Notify("Translation failed, retrying shortly.", "Warning") end
-				task.delay(31, function()
-					Localization.Warned = false
-					if Localization.Code ~= "en" then Localization.Refresh() end
-				end)
+				if Focus then Focus:Notify("Translation failed, check your executor's HTTP support.", "Warning") end
+				task.delay(31, function() Localization.Warned = false end)
 			end
-			task.wait(0.15)
+			task.wait(0.1)
 		end
 		Localization.Running = false
 	end)
@@ -760,7 +740,6 @@ local function isClick(input)
 end
 
 local ScreenRef
-local Focus
 local LayerScale = 1
 local TouchOnly = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
 
