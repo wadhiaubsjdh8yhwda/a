@@ -1204,7 +1204,8 @@ function Window:_paintBar(item, dt, hovered)
 	local hot = Scrolling.Grabbed == item or hovered == item
 	local blend = 1 - math.exp(-14 * dt)
 	item.Hot += ((hot and 1 or 0) - item.Hot) * blend
-item.Alpha += (((hot or now - item.Awake < 1.2) and 1 or 0) - item.Alpha) * blend
+local awake = hot or now - item.Awake < 0.6
+item.Alpha += ((awake and 1 or 0) - item.Alpha) * (1 - math.exp(-(awake and 14 or 3) * dt))
 	local fade = item.Fade and item.Fade() or 1
 	if self.Fader.Entries and scroll:IsDescendantOf(self.Holder) then fade *= self.Fader.Alpha end
 	local origin = (scroll.AbsolutePosition - bar.Parent.AbsolutePosition) / LayerScale
