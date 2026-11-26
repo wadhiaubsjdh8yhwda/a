@@ -400,7 +400,54 @@ local function refresh(inst, preset)
 	end
 end
 
+local Localization = {
+	Language = "English", Code = "en", Cache = {}, Manual = {}, Protected = {}, Pending = {}, InFlight = {}, Failed = {},
+	Running = false, Scheduled = false, SaveQueued = false, Warned = false, Loaded = false, Folder = nil,
+	List = {
+		{ "English", "en" }, { "Español", "es" }, { "Français", "fr" }, { "Deutsch", "de" }, { "Português", "pt" },
+		{ "Italiano", "it" }, { "Nederlands", "nl" }, { "Polski", "pl" }, { "Русский", "ru" }, { "Українська", "uk" },
+		{ "Türkçe", "tr" }, { "العربية", "ar" }, { "עברית", "iw" }, { "فارسی", "fa" }, { "اردو", "ur" },
+		{ "हिन्दी", "hi" }, { "বাংলা", "bn" }, { "ไทย", "th" }, { "Tiếng Việt", "vi" }, { "Bahasa Indonesia", "id" },
+		{ "Bahasa Melayu", "ms" }, { "Filipino", "fil" }, { "简体中文", "zh-CN" }, { "繁體中文", "zh-TW" }, { "日本語", "ja" },
+		{ "한국어", "ko" }, { "Svenska", "sv" }, { "Dansk", "da" }, { "Norsk", "no" }, { "Suomi", "fi" },
+		{ "Čeština", "cs" }, { "Ελληνικά", "el" }, { "Română", "ro" }, { "Magyar", "hu" },
+	},
+	Codes = {}, Order = {},
+}
+
+for _, entry in Localization.List do
+	table.insert(Localization.Order, entry[1])
+	Localization.Codes[entry[1]] = entry[2]
+	Localization.Protected[entry[1]] = true
+end
+
+function Localization.Eligible(text)
+	if #text < 3 or not string.find(text, "[%a\128-\255]") then return false end
+	if Localization.Protected[text] then return false end
+	if #text <= 4 and not string.find(text, "%l") then return false end
+	return true
+end
+
+function Localization.Translate(text)
+	local code = Localization.Code
+	if code == "en" or not Localization.Eligible(text) then return text end
+	local manual = Localization.Manual[code]
+	if manual and manual[text] then return manual[text] end
+	local cache = Localization.Cache[code]
+	local hit = cache and cache[text]
+	if hit then return hit end
+	if not Localization.InFlight[text] and not Localization.Pending[text] then
+		local failed = Localization.Failed[text]
+		if not failed or os.clock() > failed then
+			Localization.Pending[text] = true
+			if Localization.Kick then Localization.Kick() end
+		end
+	end
+	return text
+end
+
 local function applyCase(text)
+	text = Localization.Translate(text)
 	if Casing == "Lower Case" then return string.lower(text) end
 	if Casing == "Upper Case" or Casing == "Bold Case" then return string.upper(text) end
 	return text
@@ -426,6 +473,146 @@ local function applyTextSettings()
 		end
 		inst.FontFace = fontOf(entry.Weight)
 	end
+end
+
+function Localization.Http(url)
+	local sender = (typeof(request) == "function" and request) or (typeof(http_request) == "function" and http_request)
+		or (typeof(syn) == "table" and syn.request)
+	if sender then
+		local ok, res = pcall(sender, { Url = url, Method = "GET" })
+		local status = ok and type(res) == "table" and tonumber(res.StatusCode) or 0
+		if status >= 200 and status < 300 and type(res.Body) == "string" then return res.Body end
+	end
+	local ok, body = pcall(function() return game:HttpGet(url) end)
+	if ok and type(body) == "string" then return body end
+	return nil
+end
+
+function Localization.Fetch(text, code)
+	local url = "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&ie=UTF-8&oe=UTF-8&sl=auto&tl="
+		.. HttpService:UrlEncode(code) .. "&q=" .. HttpService:UrlEncode(text)
+	local body = Localization.Http(url)
+	if not body or string.sub(body, 1, 1) ~= "[" then return nil end
+	local ok, data = pcall(function() return HttpService:JSONDecode(body) end)
+	if not ok or type(data) ~= "table" or type(data[1]) ~= "table" then return nil end
+	local pieces = {}
+	for _, segment in ipairs(data[1]) do
+		if type(segment) == "table" and type(segment[1]) == "string" then table.insert(pieces, segment[1]) end
+	end
+	return table.concat(pieces)
+end
+
+function Localization.Batch(items, code)
+	local parts = {}
+	for index, text in ipairs(items) do
+		table.insert(parts, string.format("ZXQB%06dQXZ\n%s\n", index, text))
+	end
+	table.insert(parts, "ZXQENDQXZ")
+	local output = Localization.Fetch(table.concat(parts), code)
+	if not output then return nil end
+	local starts, ends, cursor = {}, {}, 1
+	for index = 1, #items do
+		local first, last = string.find(output, string.format("ZXQB%06dQXZ", index), cursor, true)
+		if not first then return nil end
+		starts[index], ends[index], cursor = first, last, last + 1
+	end
+	local finish = string.find(output, "ZXQENDQXZ", cursor, true)
+	if not finish then return nil end
+	local result = {}
+	for index = 1, #items do
+		local value = string.sub(output, ends[index] + 1, (starts[index + 1] or finish) - 1)
+		value = string.match(value, "^%s*(.-)%s*$")
+		if value == "" or string.find(value, "ZXQ", 1, true) then return nil end
+		result[index] = value
+	end
+	return result
+end
+
+function Localization.Solve(items, code)
+	local result = Localization.Batch(items, code)
+	if result then return result end
+	if #items == 1 then
+		local value = Localization.Fetch(items[1], code)
+		value = value and string.match(value, "^%s*(.-)%s*$")
+		if value and value ~= "" and not string.find(value, "ZXQ", 1, true) then return { value } end
+		return nil
+	end
+	local middle = math.floor(#items / 2)
+	local left, right = {}, {}
+	for index, text in ipairs(items) do table.insert(index <= middle and left or right, text) end
+	local a = Localization.Solve(left, code)
+	local b = Localization.Solve(right, code)
+	if not a and not b then return nil end
+	local merged = {}
+	for index = 1, #left do merged[index] = a and a[index] or nil end
+	for index = 1, #right do merged[middle + index] = b and b[index] or nil end
+	return merged
+end
+
+function Localization.Refresh()
+	if Localization.Scheduled then return end
+	Localization.Scheduled = true
+	task.delay(0.1, function()
+		Localization.Scheduled = false
+		applyTextSettings()
+	end)
+end
+
+function Localization.Kick()
+	if Localization.Running then return end
+	Localization.Running = true
+	task.spawn(function()
+		while next(Localization.Pending) do
+			local code = Localization.Code
+			local items, size = {}, 0
+			for text in Localization.Pending do
+				Localization.Pending[text] = nil
+				Localization.InFlight[text] = true
+				table.insert(items, text)
+				size += #text
+				if #items >= 30 or size > 1500 then break end
+			end
+			local ok, result = pcall(Localization.Solve, items, code)
+			if not ok then result = nil end
+			local store = Localization.Cache[code]
+			if not store then store = {}; Localization.Cache[code] = store end
+			local failed = false
+			for index, text in ipairs(items) do
+				local value = result and result[index]
+				if value then
+					store[text] = value
+				else
+					failed = true
+					Localization.Failed[text] = os.clock() + 30
+				end
+				Localization.InFlight[text] = nil
+			end
+			Localization.Refresh()
+			if Localization.SaveSoon then Localization.SaveSoon() end
+			if failed and not Localization.Warned then
+				Localization.Warned = true
+				if Focus then Focus:Notify("Translation failed, retrying shortly.", "Warning") end
+				task.delay(31, function()
+					Localization.Warned = false
+					if Localization.Code ~= "en" then Localization.Refresh() end
+				end)
+			end
+			task.wait(0.15)
+		end
+		Localization.Running = false
+	end)
+end
+
+function Localization.AddManual(language, map)
+	local code = Localization.Codes[language] or language
+	local store = Localization.Manual[code]
+	if not store then store = {}; Localization.Manual[code] = store end
+	for source, value in map do store[source] = value end
+	applyTextSettings()
+end
+
+function Localization.Protect(list)
+	for _, text in list do Localization.Protected[text] = true end
 end
 
 local TEXT_CLASSES = { TextLabel = true, TextButton = true, TextBox = true }
@@ -2394,13 +2581,20 @@ function Tab:Section(options)
 	end
 	local fold = new("TextButton", { AnchorPoint = Vec2(1, 0), Position = Dim2(1, 0, 0, 0), Size = Offset(30, headerH), ZIndex = 2 }, header)
 	local chevron = makeIcon(fold, "chevron", 14, arrowColor, "Element", { AnchorPoint = Vec2(0.5, 0.5), Position = Offset(15, center) })
+	local infoButton
+if TouchOnly then
+	infoButton = new("TextButton", {
+		AnchorPoint = Vec2(1, 0), Position = Dim2(1, -28, 0, 0), Size = Offset(28, headerH), ZIndex = 2, Visible = false,
+	}, header)
+	makeIcon(infoButton, "status-info", 14, arrowColor, "Element", { AnchorPoint = Vec2(0.5, 0.5), Position = Offset(14, center) })
+end
 	local body = new("Frame", {
 		Position = Offset(Metrics.Pad - 1, headerH - 1), Size = Dim2(1, -(Metrics.Pad - 1) * 2, 1, -(headerH - 1)),
 	}, clip)
 	section = setmetatable({
 		Window = win, Tab = self, Column = column, Name = options.Name, Root = root, Card = card, Body = body,
 		Items = {}, HeaderH = headerH, TotalH = headerH + 2, CardH = 0, Y = 0, Dragging = false, Dropping = false, Title = title,
-		Chevron = chevron, Collapsed = false, Header = header, Description = description, Patch = patch, Rule = rule,
+Chevron = chevron, Collapsed = false, Header = header, Description = description, Patch = patch, Rule = rule, InfoButton = infoButton,
 	}, Section)
 	table.insert(column.Sections, section)
 	table.insert(win.Sections, section)
@@ -2435,6 +2629,9 @@ function Tab:Section(options)
 		end
 	end)
 	Scrolling.Tap(fold, function() section:SetCollapsed(not section.Collapsed, true) end)
+	if infoButton then
+	Scrolling.Tap(infoButton, function() win:OpenSectionInfo(section, infoButton) end)
+end
 	section:Layout(false)
 	if options.Collapsed then section:SetCollapsed(true, false) end
 	return section
@@ -2791,6 +2988,17 @@ function Window:SetCasing(name, silent)
 	Casing = name
 	applyTextSettings()
 	if not silent then self:Notify(('Set casing to "%s".'):format(name)) end
+end
+
+function Window:SetLanguage(name, silent)
+	local code = Localization.Codes[name]
+	if not code then return end
+	Localization.Language, Localization.Code = name, code
+	table.clear(Localization.Pending)
+	table.clear(Localization.Failed)
+	Localization.Warned = false
+	applyTextSettings()
+	if not silent then self:Notify(('Language set to %s.'):format(name)) end
 end
 
 function Window:SetFont(name)
@@ -3566,6 +3774,42 @@ local function memoryFor(folder)
 	return store
 end
 
+function Localization.LoadDisk()
+	if Localization.Loaded or not Localization.Folder then return end
+	Localization.Loaded = true
+	if typeof(isfile) ~= "function" or typeof(readfile) ~= "function" then return end
+	local path = Localization.Folder .. "/translations.json"
+	if not isfile(path) then return end
+	local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
+	if not ok or type(data) ~= "table" then return end
+	for code, map in data do
+		if type(map) == "table" then
+			local store = Localization.Cache[code] or {}
+			for source, value in map do
+				if type(value) == "string" then store[source] = value end
+			end
+			Localization.Cache[code] = store
+		end
+	end
+end
+
+function Localization.SaveDisk()
+	if not Localization.Folder or typeof(writefile) ~= "function" then return end
+	pcall(function()
+		ensureFolder(Localization.Folder)
+		writefile(Localization.Folder .. "/translations.json", HttpService:JSONEncode(Localization.Cache))
+	end)
+end
+
+function Localization.SaveSoon()
+	if Localization.SaveQueued then return end
+	Localization.SaveQueued = true
+	task.delay(2, function()
+		Localization.SaveQueued = false
+		Localization.SaveDisk()
+	end)
+end
+
 function Window:_serialize()
 	local data = {}
 	for flag, object in self.Flags do
@@ -3846,6 +4090,10 @@ function Window:BuildSettings(tab)
 		self.ShowHotkeys = value
 		if self.Revealed then self.Hotkeys.Visible = value end
 	end })
+		Localization.Folder = self.ConfigFolder
+	Localization.LoadDisk()
+	Localization.Protect(FontOrder)
+	menu:Dropdown({ Name = "Language", Options = Localization.Order, Default = "English", MaxRows = 8, Early = true, Callback = function(value) self:SetLanguage(value, self.Restoring) end })
 	menu:Dropdown({ Name = "Font", Options = FontOrder, Default = "Inter", Callback = function(value) self:SetFont(value) end })
 	menu:Dropdown({ Name = "Text Weight", Options = WeightOrder, Default = BodyWeight.Name, Callback = function(value) self:SetTextWeight(value) end })
 	menu:Dropdown({ Name = "Notifications", Options = NotifyPlacements, Default = self.NotifyPlacement, Callback = function(value) self:SetNotifyPlacement(value, self.Restoring) end })
@@ -3934,6 +4182,85 @@ local TextService = game:GetService("TextService")
 function Window:_describe(item, text)
 	item.Description = text
 	table.insert(self.Described, item)
+	if item.Section then item.Section:UpdateInfo() end
+end
+
+local function measureWrapped(text, size, width)
+	local params = Instance.new("GetTextBoundsParams")
+	params.Text = applyCase(text)
+	params.Font = fontOf(nil)
+	params.Size = size
+	params.Width = width
+	local ok, bounds = pcall(TextService.GetTextBoundsAsync, TextService, params)
+	if not ok then return math.ceil(size * 1.4) end
+	return math.ceil(bounds.Y)
+end
+
+function Section:UpdateInfo()
+	if not self.InfoButton then return end
+	local any = false
+	for _, item in self.Items do
+		if item.Description then
+			any = true
+			break
+		end
+	end
+	self.InfoButton.Visible = any
+	local right = any and 62 or 34
+	self.Title.Size = Dim2(1, -(34 + right), 0, Metrics.Row)
+	if self.Description then self.Description.Size = Dim2(1, -(34 + right), 0, 14) end
+end
+
+function Window:_buildInfoPopup()
+	local pad, width = Metrics.Pad, 232
+	local frame, body, controls = self:_popupFrame(width, 100)
+	local info = { Frame = frame, Fader = newFader(frame), Rows = {}, Width = width }
+	info.Title = label(body, {
+		Text = "", TextSize = 13, Weight = Enum.FontWeight.SemiBold, X = pad, Y = 8, Right = pad,
+		Truncate = Enum.TextTruncate.AtEnd,
+	})
+	new("Frame", { Bg = "Outline", Position = Offset(0, 31), Size = Dim2(1, 0, 0, 1) }, body)
+	info.List = new("ScrollingFrame", {
+		Position = Offset(0, 32), Size = Dim2(1, 0, 1, -38), CanvasSize = Offset(0, 0), ClipsDescendants = true,
+	}, body)
+	table.insert(controls, info.List)
+	self:_addScroll(info.List, body, -4, nil, function()
+		return info.Fader.Entries and info.Fader.Alpha or 1
+	end)
+	self.Info = info
+end
+
+function Window:OpenSectionInfo(section, anchor)
+	if self.LastPopupAnchor == anchor and os.clock() - self.LastPopupTime < 0.2 then return end
+	if not self.Info then self:_buildInfoPopup() end
+	local info, pad = self.Info, Metrics.Pad
+	for _, row in info.Rows do row:Destroy() end
+	info.Rows = {}
+	setText(info.Title, section.Name)
+	local textW = info.Width - pad * 2 - 6
+	local y = 6
+	for _, item in section.Items do
+		if item.Description then
+			local name = label(info.List, {
+				Text = item.Name or item.Kind, TextSize = 12, X = pad, Y = y, Right = pad,
+				Weight = Enum.FontWeight.SemiBold, Truncate = Enum.TextTruncate.AtEnd,
+			})
+			local height = measureWrapped(item.Description, 11, textW)
+			local text = new("TextLabel", {
+				Fg = "InactiveText", Text = item.Description, TextSize = 11, TextWrapped = true,
+				Position = Offset(pad, y + 19), Size = Offset(textW, height),
+			}, info.List)
+			table.insert(info.Rows, name)
+			table.insert(info.Rows, text)
+			y += 19 + height + 10
+		end
+	end
+	local listH = math.min(y, 220)
+	info.List.CanvasSize = Offset(0, y)
+	info.List.CanvasPosition = Vec2(0, 0)
+	info.Frame.Size = Offset(info.Width, 32 + listH + 6)
+	local p, s = anchor.AbsolutePosition, anchor.AbsoluteSize
+	self:_openPopup(info, anchor, Vec2(p.X + s.X - info.Width * LayerScale, p.Y + s.Y + Metrics.Gap))
 end
 
 function Window:_buildTooltip()
@@ -4207,6 +4534,9 @@ local Blossom = { Themes = Themes, ThemeOrder = ThemeOrder, Metrics = Metrics, F
 
 local LastWindow
 Blossom.SetLucide = setLucide
+Blossom.Languages = Localization.Order
+Blossom.AddTranslations = Localization.AddManual
+Blossom.ProtectText = Localization.Protect
 function Blossom.new(options)
 	options = options or {}
 	local globalEnv = typeof(getgenv) == "function" and getgenv() or nil
