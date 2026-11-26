@@ -484,44 +484,146 @@ function Localization.Http(url)
 		or (typeof(http) == "table" and typeof(http.request) == "function" and http.request)
 	if sender then
 		local ok, res = pcall(sender, { Url = url, Method = "GET" })
-		if Localization.Debug then
-			warn("[Translate] request:", ok, type(res) == "table" and res.StatusCode or tostring(res))
+		if ok and type(res) == "table" then
+			if res.StatusCode == 429 then return nil, 429 end
+			if type(res.Body) == "string" and res.Body ~= "" then return res.Body, res.StatusCode end
+			return nil, res.StatusCode
 		end
-		if ok and type(res) == "table" and type(res.Body) == "string" and res.Body ~= "" then return res.Body end
 	end
 	local ok, body = pcall(function() return game:HttpGet(url) end)
-	if Localization.Debug then warn("[Translate] HttpGet:", ok, ok and #tostring(body) or tostring(body)) end
-	if ok and type(body) == "string" and body ~= "" then return body end
-	return nil
+	if ok and type(body) == "string" and body ~= "" then return body, 200 end
+	return nil, 0
 end
 
 Localization.Hosts = { "translate.googleapis.com", "clients5.google.com", "translate.google.com" }
 
-function Localization.Google(text, code)
+function Localization.Batch(items, code)
+	local joined = table.concat(items, "\n")
 	local query = "/translate_a/single?client=gtx&dt=t&ie=UTF-8&oe=UTF-8&sl=auto&tl="
-		.. HttpService:UrlEncode(code) .. "&q=" .. HttpService:UrlEncode(text)
-	for _, host in ipairs(Localization.Hosts) do
-		local body = Localization.Http("https://" .. host .. query)
-		if body then
-			local start = string.find(body, "[", 1, true)
-			if start then
-				local ok, data = pcall(function() return HttpService:JSONDecode(string.sub(body, start)) end)
-				if ok and type(data) == "table" and type(data[1]) == "table" then
-					local pieces = {}
-					for _, segment in ipairs(data[1]) do
-						if type(segment) == "table" and type(segment[1]) == "string" then table.insert(pieces, segment[1]) end
+		.. HttpService:UrlEncode(code) .. "&q=" .. HttpService:UrlEncode(joined)
+	local limited = false
+	for attempt = 1, 4 do
+		limited = false
+		for _, host in ipairs(Localization.Hosts) do
+			local body, status = Localization.Http("https://" .. host .. query)
+			if body then
+				local start = string.find(body, "[", 1, true)
+				if start then
+					local ok, data = pcall(function() return HttpService:JSONDecode(string.sub(body, start)) end)
+					if ok and type(data) == "table" and type(data[1]) == "table" then
+						local lines, line = {}, {}
+						for _, segment in ipairs(data[1]) do
+							if type(segment) == "table" and type(segment[1]) == "string" then
+								table.insert(line, segment[1])
+								local source = type(segment[2]) == "string" and segment[2] or ""
+								if string.sub(source, -1) == "\n" then
+									table.insert(lines, (string.gsub(table.concat(line), "[\n\r]+$", "")))
+									line = {}
+								end
+							end
+						end
+						if #line > 0 then table.insert(lines, (string.gsub(table.concat(line), "[\n\r]+$", ""))) end
+						if #lines == #items then return lines end
+						return nil, false
 					end
-					local joined = table.concat(pieces)
-					if joined ~= "" then return joined end
-				elseif Localization.Debug then
-					warn("[Translate] decode failed:", string.sub(body, 1, 120))
 				end
-			elseif Localization.Debug then
-				warn("[Translate] unexpected body:", string.sub(body, 1, 120))
+			elseif status == 429 then
+				limited = true
 			end
 		end
+		task.wait(limited and 1.2 * attempt or 0.25)
 	end
-	return nil
+	return nil, limited
+end
+
+function Localization.Solve(items, code)
+	local result = {}
+	local lines, limited = Localization.Batch(items, code)
+	if lines then
+		for index, value in ipairs(lines) do
+			value = string.match(value, "^%s*(.-)%s*$")
+			if value ~= "" then result[index] = value end
+		end
+		return result
+	end
+	if limited then return result end
+	if #items > 1 then
+		local mid = floor(#items / 2)
+		local first, second = {}, {}
+		for index, text in ipairs(items) do
+			table.insert(index <= mid and first or second, text)
+		end
+		local a, b = Localization.Solve(first, code), Localization.Solve(second, code)
+		for index, value in a do result[index] = value end
+		for index, value in b do result[mid + index] = value end
+		return result
+	end
+	local ok, value = pcall(Localization.MyMemory, items[1], code)
+	if ok and type(value) == "string" and value ~= "" then result[1] = value end
+	return result
+end
+
+function Localization.Kick()
+	if Localization.Running then return end
+	Localization.Running = true
+	task.spawn(function()
+		task.wait(0.05)
+		while next(Localization.Pending) do
+			local code = Localization.Code
+			local chunks, items, size = {}, {}, 0
+			for text in Localization.Pending do
+				Localization.Pending[text] = nil
+				Localization.InFlight[text] = true
+				local cost = #HttpService:UrlEncode(text) + 3
+				if #items > 0 and (size + cost > 1500 or #items >= 50) then
+					table.insert(chunks, items)
+					items, size = {}, 0
+				end
+				table.insert(items, text)
+				size += cost
+			end
+			if #items > 0 then table.insert(chunks, items) end
+
+			local store = Localization.Cache[code]
+			if not store then store = {}; Localization.Cache[code] = store end
+			local nextIndex, running, failed = 1, 3, false
+			local function worker()
+				while true do
+					local index = nextIndex
+					if index > #chunks then return end
+					nextIndex += 1
+					local chunk = chunks[index]
+					local ok, result = pcall(Localization.Solve, chunk, code)
+					if not ok then result = {} end
+					for position, text in ipairs(chunk) do
+						local value = result[position]
+						if value then
+							store[text] = value
+						else
+							failed = true
+							Localization.Failed[text] = os.clock() + 8
+						end
+						Localization.InFlight[text] = nil
+					end
+					Localization.Refresh()
+				end
+			end
+			for _ = 1, 3 do
+				task.spawn(function()
+					worker()
+					running -= 1
+				end)
+			end
+			while running > 0 do task.wait(0.03) end
+			Localization.SaveSoon()
+			if failed and not Localization.Warned then
+				Localization.Warned = true
+				if Focus then Focus:Notify("Some text could not be translated, retrying shortly.", "Warning") end
+				task.delay(9, function() Localization.Warned = false end)
+			end
+		end
+		Localization.Running = false
+	end)
 end
 
 function Localization.MyMemory(text, code)
@@ -538,74 +640,12 @@ function Localization.MyMemory(text, code)
 	return nil
 end
 
-function Localization.Fetch(text, code)
-	return Localization.Google(text, code) or Localization.MyMemory(text, code)
-end
-
-function Localization.Solve(items, code)
-	local result, remaining = {}, #items
-	for index, text in ipairs(items) do
-		task.spawn(function()
-			local ok, value = pcall(Localization.Fetch, text, code)
-			if ok and type(value) == "string" then
-				value = string.match(value, "^%s*(.-)%s*$")
-				if value ~= "" then result[index] = value end
-			end
-			remaining -= 1
-		end)
-	end
-	local started = os.clock()
-	while remaining > 0 and os.clock() - started < 20 do task.wait(0.05) end
-	return result
-end
-
 function Localization.Refresh()
 	if Localization.Scheduled then return end
 	Localization.Scheduled = true
 	task.delay(0.1, function()
 		Localization.Scheduled = false
 		applyTextSettings()
-	end)
-end
-
-function Localization.Kick()
-	if Localization.Running then return end
-	Localization.Running = true
-	task.spawn(function()
-		while next(Localization.Pending) do
-			local code = Localization.Code
-			local items = {}
-			for text in Localization.Pending do
-				Localization.Pending[text] = nil
-				Localization.InFlight[text] = true
-				table.insert(items, text)
-				if #items >= 8 then break end
-			end
-			local ok, result = pcall(Localization.Solve, items, code)
-			if not ok then result = {} end
-			local store = Localization.Cache[code]
-			if not store then store = {}; Localization.Cache[code] = store end
-			local failed = false
-			for index, text in ipairs(items) do
-				local value = result[index]
-				if value then
-					store[text] = value
-				else
-					failed = true
-					Localization.Failed[text] = os.clock() + 30
-				end
-				Localization.InFlight[text] = nil
-			end
-			Localization.Refresh()
-			Localization.SaveSoon()
-			if failed and not Localization.Warned then
-				Localization.Warned = true
-				if Focus then Focus:Notify("Translation failed, check your executor's HTTP support.", "Warning") end
-				task.delay(31, function() Localization.Warned = false end)
-			end
-			task.wait(0.1)
-		end
-		Localization.Running = false
 	end)
 end
 
