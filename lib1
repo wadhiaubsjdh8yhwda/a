@@ -416,6 +416,8 @@ local Localization = {
 	Codes = {}, Order = {},
 }
 
+Localization.Debug = true
+
 for _, entry in Localization.List do
 	table.insert(Localization.Order, entry[1])
 	Localization.Codes[entry[1]] = entry[2]
@@ -481,39 +483,63 @@ function Localization.Http(url)
 		or (typeof(syn) == "table" and typeof(syn.request) == "function" and syn.request)
 		or (typeof(http) == "table" and typeof(http.request) == "function" and http.request)
 	if sender then
-		local ok, res = pcall(sender, { Url = url, Method = "GET", Headers = { ["User-Agent"] = "Mozilla/5.0" } })
-		if ok and type(res) == "table" and type(res.Body) == "string" then
-			local status = tonumber(res.StatusCode)
-			if res.Success == true or (status and status >= 200 and status < 300) then return res.Body end
+		local ok, res = pcall(sender, { Url = url, Method = "GET" })
+		if Localization.Debug then
+			warn("[Translate] request:", ok, type(res) == "table" and res.StatusCode or tostring(res))
 		end
+		if ok and type(res) == "table" and type(res.Body) == "string" and res.Body ~= "" then return res.Body end
 	end
 	local ok, body = pcall(function() return game:HttpGet(url) end)
-	if ok and type(body) == "string" and body ~= "" then return body end
-	ok, body = pcall(function() return HttpService:GetAsync(url) end)
+	if Localization.Debug then warn("[Translate] HttpGet:", ok, ok and #tostring(body) or tostring(body)) end
 	if ok and type(body) == "string" and body ~= "" then return body end
 	return nil
 end
 
 Localization.Hosts = { "translate.googleapis.com", "clients5.google.com", "translate.google.com" }
 
-function Localization.Fetch(text, code)
+function Localization.Google(text, code)
 	local query = "/translate_a/single?client=gtx&dt=t&ie=UTF-8&oe=UTF-8&sl=auto&tl="
 		.. HttpService:UrlEncode(code) .. "&q=" .. HttpService:UrlEncode(text)
 	for _, host in ipairs(Localization.Hosts) do
 		local body = Localization.Http("https://" .. host .. query)
-		if body and string.sub(body, 1, 1) == "[" then
-			local ok, data = pcall(function() return HttpService:JSONDecode(body) end)
-			if ok and type(data) == "table" and type(data[1]) == "table" then
-				local pieces = {}
-				for _, segment in ipairs(data[1]) do
-					if type(segment) == "table" and type(segment[1]) == "string" then table.insert(pieces, segment[1]) end
+		if body then
+			local start = string.find(body, "[", 1, true)
+			if start then
+				local ok, data = pcall(function() return HttpService:JSONDecode(string.sub(body, start)) end)
+				if ok and type(data) == "table" and type(data[1]) == "table" then
+					local pieces = {}
+					for _, segment in ipairs(data[1]) do
+						if type(segment) == "table" and type(segment[1]) == "string" then table.insert(pieces, segment[1]) end
+					end
+					local joined = table.concat(pieces)
+					if joined ~= "" then return joined end
+				elseif Localization.Debug then
+					warn("[Translate] decode failed:", string.sub(body, 1, 120))
 				end
-				local joined = table.concat(pieces)
-				if joined ~= "" then return joined end
+			elseif Localization.Debug then
+				warn("[Translate] unexpected body:", string.sub(body, 1, 120))
 			end
 		end
 	end
 	return nil
+end
+
+function Localization.MyMemory(text, code)
+	local lang = code == "iw" and "he" or code
+	local url = "https://api.mymemory.translated.net/get?q=" .. HttpService:UrlEncode(string.sub(text, 1, 450))
+		.. "&langpair=" .. HttpService:UrlEncode("en|" .. lang)
+	local body = Localization.Http(url)
+	if not body then return nil end
+	local ok, data = pcall(function() return HttpService:JSONDecode(body) end)
+	if ok and type(data) == "table" and type(data.responseData) == "table" then
+		local value = data.responseData.translatedText
+		if type(value) == "string" and value ~= "" and not string.find(value, "MYMEMORY WARNING", 1, true) then return value end
+	end
+	return nil
+end
+
+function Localization.Fetch(text, code)
+	return Localization.Google(text, code) or Localization.MyMemory(text, code)
 end
 
 function Localization.Solve(items, code)
