@@ -2394,13 +2394,20 @@ function Tab:Section(options)
 	end
 	local fold = new("TextButton", { AnchorPoint = Vec2(1, 0), Position = Dim2(1, 0, 0, 0), Size = Offset(30, headerH), ZIndex = 2 }, header)
 	local chevron = makeIcon(fold, "chevron", 14, arrowColor, "Element", { AnchorPoint = Vec2(0.5, 0.5), Position = Offset(15, center) })
+	local infoButton
+if TouchOnly then
+	infoButton = new("TextButton", {
+		AnchorPoint = Vec2(1, 0), Position = Dim2(1, -28, 0, 0), Size = Offset(28, headerH), ZIndex = 2, Visible = false,
+	}, header)
+	makeIcon(infoButton, "status-info", 14, arrowColor, "Element", { AnchorPoint = Vec2(0.5, 0.5), Position = Offset(14, center) })
+end
 	local body = new("Frame", {
 		Position = Offset(Metrics.Pad - 1, headerH - 1), Size = Dim2(1, -(Metrics.Pad - 1) * 2, 1, -(headerH - 1)),
 	}, clip)
 	section = setmetatable({
 		Window = win, Tab = self, Column = column, Name = options.Name, Root = root, Card = card, Body = body,
 		Items = {}, HeaderH = headerH, TotalH = headerH + 2, CardH = 0, Y = 0, Dragging = false, Dropping = false, Title = title,
-		Chevron = chevron, Collapsed = false, Header = header, Description = description, Patch = patch, Rule = rule,
+Chevron = chevron, Collapsed = false, Header = header, Description = description, Patch = patch, Rule = rule, InfoButton = infoButton,
 	}, Section)
 	table.insert(column.Sections, section)
 	table.insert(win.Sections, section)
@@ -2435,6 +2442,9 @@ function Tab:Section(options)
 		end
 	end)
 	Scrolling.Tap(fold, function() section:SetCollapsed(not section.Collapsed, true) end)
+	if infoButton then
+	Scrolling.Tap(infoButton, function() win:OpenSectionInfo(section, infoButton) end)
+end
 	section:Layout(false)
 	if options.Collapsed then section:SetCollapsed(true, false) end
 	return section
@@ -3934,6 +3944,85 @@ local TextService = game:GetService("TextService")
 function Window:_describe(item, text)
 	item.Description = text
 	table.insert(self.Described, item)
+	if item.Section then item.Section:UpdateInfo() end
+end
+
+local function measureWrapped(text, size, width)
+	local params = Instance.new("GetTextBoundsParams")
+	params.Text = applyCase(text)
+	params.Font = fontOf(nil)
+	params.Size = size
+	params.Width = width
+	local ok, bounds = pcall(TextService.GetTextBoundsAsync, TextService, params)
+	if not ok then return math.ceil(size * 1.4) end
+	return math.ceil(bounds.Y)
+end
+
+function Section:UpdateInfo()
+	if not self.InfoButton then return end
+	local any = false
+	for _, item in self.Items do
+		if item.Description then
+			any = true
+			break
+		end
+	end
+	self.InfoButton.Visible = any
+	local right = any and 62 or 34
+	self.Title.Size = Dim2(1, -(34 + right), 0, Metrics.Row)
+	if self.Description then self.Description.Size = Dim2(1, -(34 + right), 0, 14) end
+end
+
+function Window:_buildInfoPopup()
+	local pad, width = Metrics.Pad, 232
+	local frame, body, controls = self:_popupFrame(width, 100)
+	local info = { Frame = frame, Fader = newFader(frame), Rows = {}, Width = width }
+	info.Title = label(body, {
+		Text = "", TextSize = 13, Weight = Enum.FontWeight.SemiBold, X = pad, Y = 8, Right = pad,
+		Truncate = Enum.TextTruncate.AtEnd,
+	})
+	new("Frame", { Bg = "Outline", Position = Offset(0, 31), Size = Dim2(1, 0, 0, 1) }, body)
+	info.List = new("ScrollingFrame", {
+		Position = Offset(0, 32), Size = Dim2(1, 0, 1, -38), CanvasSize = Offset(0, 0), ClipsDescendants = true,
+	}, body)
+	table.insert(controls, info.List)
+	self:_addScroll(info.List, body, -4, nil, function()
+		return info.Fader.Entries and info.Fader.Alpha or 1
+	end)
+	self.Info = info
+end
+
+function Window:OpenSectionInfo(section, anchor)
+	if self.LastPopupAnchor == anchor and os.clock() - self.LastPopupTime < 0.2 then return end
+	if not self.Info then self:_buildInfoPopup() end
+	local info, pad = self.Info, Metrics.Pad
+	for _, row in info.Rows do row:Destroy() end
+	info.Rows = {}
+	setText(info.Title, section.Name)
+	local textW = info.Width - pad * 2 - 6
+	local y = 6
+	for _, item in section.Items do
+		if item.Description then
+			local name = label(info.List, {
+				Text = item.Name or item.Kind, TextSize = 12, X = pad, Y = y, Right = pad,
+				Weight = Enum.FontWeight.SemiBold, Truncate = Enum.TextTruncate.AtEnd,
+			})
+			local height = measureWrapped(item.Description, 11, textW)
+			local text = new("TextLabel", {
+				Fg = "InactiveText", Text = item.Description, TextSize = 11, TextWrapped = true,
+				Position = Offset(pad, y + 19), Size = Offset(textW, height),
+			}, info.List)
+			table.insert(info.Rows, name)
+			table.insert(info.Rows, text)
+			y += 19 + height + 10
+		end
+	end
+	local listH = math.min(y, 220)
+	info.List.CanvasSize = Offset(0, y)
+	info.List.CanvasPosition = Vec2(0, 0)
+	info.Frame.Size = Offset(info.Width, 32 + listH + 6)
+	local p, s = anchor.AbsolutePosition, anchor.AbsoluteSize
+	self:_openPopup(info, anchor, Vec2(p.X + s.X - info.Width * LayerScale, p.Y + s.Y + Metrics.Gap))
 end
 
 function Window:_buildTooltip()
