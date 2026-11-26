@@ -10,7 +10,6 @@ local Offset = UDim2.fromOffset
 local RGB = Color3.fromRGB
 local floor, round = math.floor, math.round
 local FULL = 99
-local Focus
 
 
 local Metrics = {
@@ -401,56 +400,7 @@ local function refresh(inst, preset)
 	end
 end
 
-local Localization = {
-	Language = "English", Code = "en", Cache = {}, Manual = {}, Protected = {}, Pending = {}, InFlight = {}, Failed = {},
-	Running = false, Scheduled = false, SaveQueued = false, Warned = false, Loaded = false, Folder = nil,
-	List = {
-		{ "English", "en" }, { "Español", "es" }, { "Français", "fr" }, { "Deutsch", "de" }, { "Português", "pt" },
-		{ "Italiano", "it" }, { "Nederlands", "nl" }, { "Polski", "pl" }, { "Русский", "ru" }, { "Українська", "uk" },
-		{ "Türkçe", "tr" }, { "العربية", "ar" }, { "עברית", "iw" }, { "فارسی", "fa" }, { "اردو", "ur" },
-		{ "हिन्दी", "hi" }, { "বাংলা", "bn" }, { "ไทย", "th" }, { "Tiếng Việt", "vi" }, { "Bahasa Indonesia", "id" },
-		{ "Bahasa Melayu", "ms" }, { "Filipino", "fil" }, { "简体中文", "zh-CN" }, { "繁體中文", "zh-TW" }, { "日本語", "ja" },
-		{ "한국어", "ko" }, { "Svenska", "sv" }, { "Dansk", "da" }, { "Norsk", "no" }, { "Suomi", "fi" },
-		{ "Čeština", "cs" }, { "Ελληνικά", "el" }, { "Română", "ro" }, { "Magyar", "hu" },
-	},
-	Codes = {}, Order = {},
-}
-
-Localization.Debug = true
-
-for _, entry in Localization.List do
-	table.insert(Localization.Order, entry[1])
-	Localization.Codes[entry[1]] = entry[2]
-	Localization.Protected[entry[1]] = true
-end
-
-function Localization.Eligible(text)
-	if #text < 3 or not string.find(text, "[%a\128-\255]") then return false end
-	if Localization.Protected[text] then return false end
-	if #text <= 4 and not string.find(text, "%l") then return false end
-	return true
-end
-
-function Localization.Translate(text)
-	local code = Localization.Code
-	if code == "en" or not Localization.Eligible(text) then return text end
-	local manual = Localization.Manual[code]
-	if manual and manual[text] then return manual[text] end
-	local cache = Localization.Cache[code]
-	local hit = cache and cache[text]
-	if hit then return hit end
-	if not Localization.InFlight[text] and not Localization.Pending[text] then
-		local failed = Localization.Failed[text]
-		if not failed or os.clock() > failed then
-			Localization.Pending[text] = true
-			if Localization.Kick then Localization.Kick() end
-		end
-	end
-	return text
-end
-
 local function applyCase(text)
-	text = Localization.Translate(text)
 	if Casing == "Lower Case" then return string.lower(text) end
 	if Casing == "Upper Case" or Casing == "Bold Case" then return string.upper(text) end
 	return text
@@ -476,189 +426,6 @@ local function applyTextSettings()
 		end
 		inst.FontFace = fontOf(entry.Weight)
 	end
-end
-
-function Localization.Http(url)
-	local sender = (typeof(request) == "function" and request) or (typeof(http_request) == "function" and http_request)
-		or (typeof(syn) == "table" and typeof(syn.request) == "function" and syn.request)
-		or (typeof(http) == "table" and typeof(http.request) == "function" and http.request)
-	if sender then
-		local ok, res = pcall(sender, { Url = url, Method = "GET" })
-		if ok and type(res) == "table" then
-			if res.StatusCode == 429 then return nil, 429 end
-			if type(res.Body) == "string" and res.Body ~= "" then return res.Body, res.StatusCode end
-			return nil, res.StatusCode
-		end
-	end
-	local ok, body = pcall(function() return game:HttpGet(url) end)
-	if ok and type(body) == "string" and body ~= "" then return body, 200 end
-	return nil, 0
-end
-
-Localization.Hosts = { "translate.googleapis.com", "clients5.google.com", "translate.google.com" }
-
-function Localization.Batch(items, code)
-	local joined = table.concat(items, "\n")
-	local query = "/translate_a/single?client=gtx&dt=t&ie=UTF-8&oe=UTF-8&sl=auto&tl="
-		.. HttpService:UrlEncode(code) .. "&q=" .. HttpService:UrlEncode(joined)
-	local limited = false
-	for attempt = 1, 4 do
-		limited = false
-		for _, host in ipairs(Localization.Hosts) do
-			local body, status = Localization.Http("https://" .. host .. query)
-			if body then
-				local start = string.find(body, "[", 1, true)
-				if start then
-					local ok, data = pcall(function() return HttpService:JSONDecode(string.sub(body, start)) end)
-					if ok and type(data) == "table" and type(data[1]) == "table" then
-						local lines, line = {}, {}
-						for _, segment in ipairs(data[1]) do
-							if type(segment) == "table" and type(segment[1]) == "string" then
-								table.insert(line, segment[1])
-								local source = type(segment[2]) == "string" and segment[2] or ""
-								if string.sub(source, -1) == "\n" then
-									table.insert(lines, (string.gsub(table.concat(line), "[\n\r]+$", "")))
-									line = {}
-								end
-							end
-						end
-						if #line > 0 then table.insert(lines, (string.gsub(table.concat(line), "[\n\r]+$", ""))) end
-						if #lines == #items then return lines end
-						return nil, false
-					end
-				end
-			elseif status == 429 then
-				limited = true
-			end
-		end
-		task.wait(limited and 1.2 * attempt or 0.25)
-	end
-	return nil, limited
-end
-
-function Localization.Solve(items, code)
-	local result = {}
-	local lines, limited = Localization.Batch(items, code)
-	if lines then
-		for index, value in ipairs(lines) do
-			value = string.match(value, "^%s*(.-)%s*$")
-			if value ~= "" then result[index] = value end
-		end
-		return result
-	end
-	if limited then return result end
-	if #items > 1 then
-		local mid = floor(#items / 2)
-		local first, second = {}, {}
-		for index, text in ipairs(items) do
-			table.insert(index <= mid and first or second, text)
-		end
-		local a, b = Localization.Solve(first, code), Localization.Solve(second, code)
-		for index, value in a do result[index] = value end
-		for index, value in b do result[mid + index] = value end
-		return result
-	end
-	local ok, value = pcall(Localization.MyMemory, items[1], code)
-	if ok and type(value) == "string" and value ~= "" then result[1] = value end
-	return result
-end
-
-function Localization.Kick()
-	if Localization.Running then return end
-	Localization.Running = true
-	task.spawn(function()
-		task.wait(0.05)
-		while next(Localization.Pending) do
-			local code = Localization.Code
-			local chunks, items, size = {}, {}, 0
-			for text in Localization.Pending do
-				Localization.Pending[text] = nil
-				Localization.InFlight[text] = true
-				local cost = #HttpService:UrlEncode(text) + 3
-				if #items > 0 and (size + cost > 1500 or #items >= 50) then
-					table.insert(chunks, items)
-					items, size = {}, 0
-				end
-				table.insert(items, text)
-				size += cost
-			end
-			if #items > 0 then table.insert(chunks, items) end
-
-			local store = Localization.Cache[code]
-			if not store then store = {}; Localization.Cache[code] = store end
-			local nextIndex, running, failed = 1, 3, false
-			local function worker()
-				while true do
-					local index = nextIndex
-					if index > #chunks then return end
-					nextIndex += 1
-					local chunk = chunks[index]
-					local ok, result = pcall(Localization.Solve, chunk, code)
-					if not ok then result = {} end
-					for position, text in ipairs(chunk) do
-						local value = result[position]
-						if value then
-							store[text] = value
-						else
-							failed = true
-							Localization.Failed[text] = os.clock() + 8
-						end
-						Localization.InFlight[text] = nil
-					end
-					Localization.Refresh()
-				end
-			end
-			for _ = 1, 3 do
-				task.spawn(function()
-					worker()
-					running -= 1
-				end)
-			end
-			while running > 0 do task.wait(0.03) end
-			Localization.SaveSoon()
-			if failed and not Localization.Warned then
-				Localization.Warned = true
-				if Focus then Focus:Notify("Some text could not be translated, retrying shortly.", "Warning") end
-				task.delay(9, function() Localization.Warned = false end)
-			end
-		end
-		Localization.Running = false
-	end)
-end
-
-function Localization.MyMemory(text, code)
-	local lang = code == "iw" and "he" or code
-	local url = "https://api.mymemory.translated.net/get?q=" .. HttpService:UrlEncode(string.sub(text, 1, 450))
-		.. "&langpair=" .. HttpService:UrlEncode("en|" .. lang)
-	local body = Localization.Http(url)
-	if not body then return nil end
-	local ok, data = pcall(function() return HttpService:JSONDecode(body) end)
-	if ok and type(data) == "table" and type(data.responseData) == "table" then
-		local value = data.responseData.translatedText
-		if type(value) == "string" and value ~= "" and not string.find(value, "MYMEMORY WARNING", 1, true) then return value end
-	end
-	return nil
-end
-
-function Localization.Refresh()
-	if Localization.Scheduled then return end
-	Localization.Scheduled = true
-	task.delay(0.1, function()
-		Localization.Scheduled = false
-		applyTextSettings()
-	end)
-end
-
-function Localization.AddManual(language, map)
-	local code = Localization.Codes[language] or language
-	local store = Localization.Manual[code]
-	if not store then store = {}; Localization.Manual[code] = store end
-	for source, value in map do store[source] = value end
-	applyTextSettings()
-end
-
-function Localization.Protect(list)
-	for _, text in list do Localization.Protected[text] = true end
 end
 
 local TEXT_CLASSES = { TextLabel = true, TextButton = true, TextBox = true }
@@ -806,6 +573,7 @@ local function isClick(input)
 end
 
 local ScreenRef
+local Focus
 local LayerScale = 1
 local TouchOnly = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
 
@@ -3035,17 +2803,6 @@ function Window:SetCasing(name, silent)
 	if not silent then self:Notify(('Set casing to "%s".'):format(name)) end
 end
 
-function Window:SetLanguage(name, silent)
-	local code = Localization.Codes[name]
-	if not code then return end
-	Localization.Language, Localization.Code = name, code
-	table.clear(Localization.Pending)
-	table.clear(Localization.Failed)
-	Localization.Warned = false
-	applyTextSettings()
-	if not silent then self:Notify(('Language set to %s.'):format(name)) end
-end
-
 function Window:SetFont(name)
 	FontFamily = Fonts[name] or name
 	applyTextSettings()
@@ -3819,42 +3576,6 @@ local function memoryFor(folder)
 	return store
 end
 
-function Localization.LoadDisk()
-	if Localization.Loaded or not Localization.Folder then return end
-	Localization.Loaded = true
-	if typeof(isfile) ~= "function" or typeof(readfile) ~= "function" then return end
-	local path = Localization.Folder .. "/translations.json"
-	if not isfile(path) then return end
-	local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
-	if not ok or type(data) ~= "table" then return end
-	for code, map in data do
-		if type(map) == "table" then
-			local store = Localization.Cache[code] or {}
-			for source, value in map do
-				if type(value) == "string" then store[source] = value end
-			end
-			Localization.Cache[code] = store
-		end
-	end
-end
-
-function Localization.SaveDisk()
-	if not Localization.Folder or typeof(writefile) ~= "function" then return end
-	pcall(function()
-		ensureFolder(Localization.Folder)
-		writefile(Localization.Folder .. "/translations.json", HttpService:JSONEncode(Localization.Cache))
-	end)
-end
-
-function Localization.SaveSoon()
-	if Localization.SaveQueued then return end
-	Localization.SaveQueued = true
-	task.delay(2, function()
-		Localization.SaveQueued = false
-		Localization.SaveDisk()
-	end)
-end
-
 function Window:_serialize()
 	local data = {}
 	for flag, object in self.Flags do
@@ -4135,10 +3856,6 @@ function Window:BuildSettings(tab)
 		self.ShowHotkeys = value
 		if self.Revealed then self.Hotkeys.Visible = value end
 	end })
-		Localization.Folder = self.ConfigFolder
-	Localization.LoadDisk()
-	Localization.Protect(FontOrder)
-	menu:Dropdown({ Name = "Language", Options = Localization.Order, Default = "English", MaxRows = 8, Early = true, Callback = function(value) self:SetLanguage(value, self.Restoring) end })
 	menu:Dropdown({ Name = "Font", Options = FontOrder, Default = "Inter", Callback = function(value) self:SetFont(value) end })
 	menu:Dropdown({ Name = "Text Weight", Options = WeightOrder, Default = BodyWeight.Name, Callback = function(value) self:SetTextWeight(value) end })
 	menu:Dropdown({ Name = "Notifications", Options = NotifyPlacements, Default = self.NotifyPlacement, Callback = function(value) self:SetNotifyPlacement(value, self.Restoring) end })
@@ -4579,9 +4296,6 @@ local Blossom = { Themes = Themes, ThemeOrder = ThemeOrder, Metrics = Metrics, F
 
 local LastWindow
 Blossom.SetLucide = setLucide
-Blossom.Languages = Localization.Order
-Blossom.AddTranslations = Localization.AddManual
-Blossom.ProtectText = Localization.Protect
 function Blossom.new(options)
 	options = options or {}
 	local globalEnv = typeof(getgenv) == "function" and getgenv() or nil
