@@ -4025,6 +4025,293 @@ function Window:OpenSectionInfo(section, anchor)
 	self:_openPopup(info, anchor, Vec2(p.X + s.X - info.Width * LayerScale, p.Y + s.Y + Metrics.Gap))
 end
 
+local function settle(section, item, height)
+	if item.Height == height then return end
+	item.Height = height
+	item.Frame.Size = Dim2(1, 0, 0, height)
+	section:Layout(false)
+end
+
+local function deferResize(win, item, callback)
+	local token = 0
+	table.insert(win.ResizeJobs, function()
+		token += 1
+		local mine = token
+		task.delay(0.1, function()
+			if token == mine and item.Frame.Parent then callback() end
+		end)
+	end)
+end
+
+function Section:Profile(options)
+	local player = options.Player or Players.LocalPlayer
+	local item = self:_item(56, "Profile", nil, false)
+	local frame = item.Frame
+	local ring = new("Frame", {
+		Bg = "Element", Position = Offset(1, 6), Size = Offset(44, 44), Radius = FULL, Border = "Accent",
+	}, frame)
+	local picture = new("ImageLabel", {
+		Position = Offset(2, 2), Size = Dim2(1, -4, 1, -4), Radius = FULL, ScaleType = Enum.ScaleType.Crop,
+	}, ring)
+	label(frame, {
+		Text = player.DisplayName, TextSize = 14, Weight = Enum.FontWeight.Bold, X = 58, Y = 6, RowH = 18,
+		Truncate = Enum.TextTruncate.AtEnd,
+	})
+	label(frame, {
+		Fg = "InactiveText", Text = "@" .. player.Name, TextSize = 11, X = 58, Y = 24, RowH = 14,
+		Truncate = Enum.TextTruncate.AtEnd,
+	})
+	label(frame, {
+		Fg = "InactiveText", Text = "ID  " .. player.UserId, TextSize = 11, X = 58, Y = 38, RowH = 14,
+		Truncate = Enum.TextTruncate.AtEnd,
+	})
+	task.spawn(function()
+		local ok, image = pcall(Players.GetUserThumbnailAsync, Players, player.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
+		if ok and picture.Parent then picture.Image = image end
+	end)
+	return { Item = item, Picture = picture }
+end
+
+function Section:Stat(options)
+	local item = self:_item(Metrics.Row, "Stat", options.Name)
+	local name = label(item.Frame, { Text = options.Name, Truncate = Enum.TextTruncate.AtEnd })
+	local value = label(item.Frame, { Fg = "InactiveText", Text = tostring(options.Value or ""), Truncate = Enum.TextTruncate.AtEnd })
+	value.TextXAlignment = Enum.TextXAlignment.Right
+	local function fit()
+		name.Size = Dim2(1, -(math.ceil(value.TextBounds.X) + Metrics.Gap * 2), 0, Metrics.Row)
+	end
+	value:GetPropertyChangedSignal("TextBounds"):Connect(fit)
+	fit()
+	local object = { Item = item, Instance = value }
+	function object:Set(newValue)
+		setText(value, tostring(newValue))
+	end
+	return object
+end
+
+function Section:Field(options)
+	local win = self.Window
+	local item = self:_item(Metrics.DropdownH, "Field", options.Name)
+	label(item.Frame, { Text = options.Name, Truncate = Enum.TextTruncate.AtEnd })
+	local box = new("TextButton", {
+		Position = Offset(1, Metrics.DropdownH - Metrics.InputH + 1), Size = Dim2(1, -2, 0, Metrics.InputH - 2),
+		Radius = Metrics.Radius, Border = "Outline", BackgroundTransparency = 0,
+	}, item.Frame)
+	interactive(box, "Element", "HoveredElement", "Inline")
+	addGradient(box)
+	local copyable = options.Copy ~= false
+	local value = label(box, {
+		Fg = "InactiveText", Text = options.Value or "", TextSize = 13, X = 7, RowH = Metrics.InputH - 2,
+		Right = copyable and 28 or 8, Truncate = Enum.TextTruncate.AtEnd,
+	})
+	local object = { Item = item, Instance = box, Value = options.Value or "" }
+	function object:Set(newValue)
+		object.Value = newValue
+		setText(value, newValue)
+	end
+	if copyable then
+		makeIcon(box, "copy", 14, "InactiveText", "Element", { AnchorPoint = Vec2(0.5, 0.5), Position = Dim2(1, -15, 0.5, 0) })
+		Scrolling.Tap(box, function()
+			if copyToClipboard(object.Value) then
+				win:Notify(("Copied %s."):format(string.lower(options.Name)))
+			else
+				win:Notify("Clipboard unavailable on this executor.", "Warning")
+			end
+		end)
+	end
+	return object
+end
+
+function Section:Paragraph(options)
+	local win = self.Window
+	local size = options.TextSize or 12
+	local raw = options.Text or ""
+	local item = self:_item(Metrics.Row, "Paragraph", nil, false)
+	local text = new("TextLabel", {
+		Fg = options.Fg or "InactiveText", Text = raw, TextSize = size, TextWrapped = true,
+		Position = Offset(1, 0), Size = Dim2(1, -2, 0, Metrics.Row),
+	}, item.Frame)
+	if options.Center then text.TextXAlignment = Enum.TextXAlignment.Center end
+	local function fit()
+		local height = measureWrapped(raw, size, trackWidth(win))
+		text.Size = Dim2(1, -2, 0, height)
+		settle(self, item, height)
+	end
+	local object = { Item = item, Instance = text }
+	function object:Set(value)
+		raw = value
+		setText(text, value)
+		fit()
+	end
+	fit()
+	deferResize(win, item, fit)
+	return object
+end
+
+function Section:Changelog(options)
+	local win = self.Window
+	local item = self:_item(Metrics.Row, "Changelog", options.Version, false)
+	local frame = item.Frame
+	local chip = new("Frame", {
+		Bg = "Element", Position = Offset(1, 1), Size = Offset(16, Metrics.ChipH - 2), Radius = Metrics.Radius, Border = "Outline",
+	}, frame)
+	addGradient(chip)
+	local tag = label(chip, { Fg = "Accent", Text = options.Version or "v1.0", TextSize = 11, X = 4, RowH = Metrics.ChipH - 2 })
+	local title = label(frame, { Text = options.Title or "", Truncate = Enum.TextTruncate.AtEnd })
+	local date = label(frame, { Fg = "InactiveText", Text = options.Date or "", TextSize = 11, Truncate = Enum.TextTruncate.AtEnd })
+	date.TextXAlignment = Enum.TextXAlignment.Right
+	local chipW = 18
+	local function head()
+		local dateW = options.Date and (math.ceil(date.TextBounds.X) + Metrics.Gap) or 0
+		local x = chipW + Metrics.Gap
+		title.Position = Offset(x, title.Position.Y.Offset)
+		title.Size = Dim2(1, -(x + dateW), 0, Metrics.Row)
+	end
+	fitChip(chip, tag, 18, function(width)
+		chipW = width
+		head()
+	end)
+	date:GetPropertyChangedSignal("TextBounds"):Connect(head)
+	head()
+
+	local rows = {}
+	for _, line in options.Lines or {} do
+		local dot = new("Frame", { Bg = "Accent", Size = Offset(4, 4), Radius = FULL }, frame)
+		local text = new("TextLabel", {
+			Fg = function() return Current.Text:Lerp(Current.InactiveText, 0.25) end,
+			Text = line, TextSize = 12, TextWrapped = true,
+		}, frame)
+		table.insert(rows, { Dot = dot, Text = text, Raw = line })
+	end
+
+	local function relayout()
+		local width = trackWidth(win) - 12
+		local y = Metrics.Row + 6
+		for _, row in rows do
+			local height = measureWrapped(row.Raw, 12, width)
+			row.Text.Position = Offset(12, y)
+			row.Text.Size = Offset(width, height)
+			row.Dot.Position = Offset(3, y + 5)
+			y += height + 4
+		end
+		settle(self, item, #rows > 0 and y - 4 or Metrics.Row)
+	end
+	relayout()
+	deferResize(win, item, relayout)
+	return { Item = item }
+end
+
+function Window:BuildHome(tab, options)
+	options = options or {}
+	local player = Players.LocalPlayer
+	local TeleportService = game:GetService("TeleportService")
+	local MarketplaceService = game:GetService("MarketplaceService")
+	local home = {}
+
+	local profile = tab:Section({ Name = "Player Info", Icon = "user", Side = 1 })
+	profile:Profile({ Player = player })
+	profile:Divider()
+	profile:Stat({ Name = "Account Age", Value = player.AccountAge .. " days" })
+	home.Player = profile
+
+	local details = tab:Section({ Name = "Game Details", Icon = "gamepad-2", Side = 1 })
+	local gameField = details:Field({ Name = "Game", Value = "Loading..." })
+	local hasJob = game.JobId ~= ""
+	details:Field({ Name = "Server ID", Value = hasJob and game.JobId or "Unavailable", Copy = hasJob })
+	local playersStat = details:Stat({ Name = "Players", Value = "" })
+	details:Stat({ Name = "Place ID", Value = tostring(game.PlaceId) })
+	details:Divider()
+
+	local function updatePlayers()
+		playersStat:Set(#Players:GetPlayers() .. " / " .. Players.MaxPlayers)
+	end
+	updatePlayers()
+	table.insert(self.Connections, Players.PlayerAdded:Connect(updatePlayers))
+	table.insert(self.Connections, Players.PlayerRemoving:Connect(function()
+		task.delay(0.1, updatePlayers)
+	end))
+
+	task.spawn(function()
+		local ok, info = pcall(MarketplaceService.GetProductInfo, MarketplaceService, game.PlaceId)
+		gameField:Set(ok and info.Name or "Unknown")
+	end)
+
+	local function joinServer(jobId)
+		local ok = pcall(TeleportService.TeleportToPlaceInstance, TeleportService, game.PlaceId, jobId, player)
+		if not ok then self:Notify("Teleport failed.", "Error") end
+	end
+
+	details:Button({ Name = "Rejoin", NoSave = true, Callback = function()
+		self:Notify("Rejoining...", "Info")
+		if #Players:GetPlayers() <= 1 then
+			pcall(TeleportService.Teleport, TeleportService, game.PlaceId, player)
+		else
+			joinServer(game.JobId)
+		end
+	end })
+
+	details:Button({ Name = "Server Hop", NoSave = true, Callback = function()
+		self:Notify("Searching for a server...", "Info")
+		task.spawn(function()
+			local url = "https://games.roblox.com/v1/games/" .. tostring(game.PlaceId) .. "/servers/Public?sortOrder=Asc&limit=100"
+			local ok, result = pcall(function() return HttpService:JSONDecode(game:HttpGet(url)) end)
+			if not ok or type(result) ~= "table" or type(result.data) ~= "table" then
+				self:Notify("Could not fetch the server list.", "Error")
+				return
+			end
+			local pool = {}
+			for _, server in result.data do
+				if server.id ~= game.JobId and server.playing < server.maxPlayers then
+					table.insert(pool, server.id)
+				end
+			end
+			if #pool == 0 then
+				self:Notify("No open servers found.", "Warning")
+				return
+			end
+			joinServer(pool[math.random(#pool)])
+		end)
+	end })
+
+	details:Divider()
+	local jobBox = details:Textbox({ Placeholder = "Paste Job ID", NoSave = true })
+	details:Button({ Name = "Join Server", NoSave = true, Callback = function()
+		local jobId = (string.gsub(jobBox.Instance.Text, "%s", ""))
+		if jobId == "" then
+			self:Notify("Enter a Job ID first.", "Warning")
+		elseif jobId == game.JobId then
+			self:Notify("You are already in that server.", "Warning")
+		else
+			self:Notify("Joining server...", "Info")
+			joinServer(jobId)
+		end
+	end })
+	home.Game = details
+
+	local changelog = tab:Section({ Name = "Changelog", Icon = "history", Side = 2 })
+	local entries = options.Changelog or {
+		{
+			Version = "v1.1.0", Title = "Home tab", Date = "26 Nov 2026",
+			Lines = { "Added player info and game details.", "Added rejoin, server hop and join by Job ID." },
+		},
+		{
+			Version = "v1.0.0", Title = "Initial release", Date = "20 Nov 2026",
+			Lines = { "First public release." },
+		},
+	}
+	for index, entry in entries do
+		if index > 1 then changelog:Divider() end
+		changelog:Changelog(entry)
+	end
+	home.Changelog = changelog
+
+	local pinned = tab:Section({ Name = "Pinned", Icon = "pin", Side = 2 })
+	pinned:Paragraph({ Text = "Nothing pinned yet.\nPinned items will show up here.", Center = true })
+	home.Pinned = pinned
+
+	return home
+end
+
 function Window:_buildTooltip()
 	local frame = new("Frame", { Bg = "Background", Border = "Outline", Radius = Metrics.FloatRadius, Size = Offset(40, 24), Visible = false }, self.Tooltips)
 	local text = new("TextLabel", { Fg = "Text", TextSize = 11, TextWrapped = true, Text = "", Position = Offset(8, 6), Size = Offset(20, 12) }, frame)
