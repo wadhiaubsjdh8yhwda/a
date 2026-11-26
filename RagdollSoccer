@@ -4005,9 +4005,9 @@ function MystrixHub.Functions.DribblePick(speed, p, threats, crowd, last, rare)
 end
 
 function MystrixHub.Functions.ShotGate(from)
-    local T = getgenv().MystrixTarget
-    if T.Enabled and not T.Goal and T.Model then return nil end
-    local goal = MystrixHub.Functions.SilentAimGoal()
+    local F = MystrixHub.Functions
+    if F.CallPassFor(from.X, from.Z) then return nil end
+    local goal = F.SilentAimGoal()
     if not goal then return nil end
     if (from.X - goal.x) * goal.out >= 0 then return nil end
     local dx, dz = goal.x - from.X, goal.z - from.Z
@@ -4018,144 +4018,92 @@ function MystrixHub.Functions.ShotGate(from)
     return goal
 end
 
-function MystrixHub.Functions.TargetCandidates()
+getgenv().MystrixCallPass = getgenv().MystrixCallPass or { Enabled = false, Offside = true, GoalRange = 25 }
+
+function MystrixHub.Functions.CallPassTarget()
     local F = MystrixHub.Functions
+    local cfg = getgenv().MystrixCallPass
+    local now = os.clock()
     local char = LocalPlayer.Character
+    local cache = MystrixHub.CallPassCache
+    if cache and cache.Char == char and now - cache.At < 0.08 then
+        return cache.Root
+    end
     local root = char and char:FindFirstChild("Root")
     local team = char and char:GetAttribute("Team")
-    if not root or type(team) ~= "string" then return {} end
-    local goal = F.SilentAimGoal()
-    local list = {}
-    for _, e in ipairs(F.MannequinSnapshot()) do
-        if e.model ~= char and e.team == team and not e.keeper then
-            local score = goal and math.abs(goal.x - e.pos.X) or (e.pos - root.Position).Magnitude
-            list[#list + 1] = { model = e.model, score = score }
-        end
-    end
-    table.sort(list, function(a, b) return a.score < b.score end)
-    return list
-end
-
-function MystrixHub.Functions.UpdateTargetMarker()
-    local F = MystrixHub.Functions
-    local T = getgenv().MystrixTarget
-    local gui = MystrixHub.TargetGui
-    if not T.Enabled then
-        if gui then gui.Enabled = false end
-        return
-    end
-    if not (gui and gui.Parent) then
-        gui = Instance.new("BillboardGui")
-        gui.Name = "MystrixTarget"
-        gui.AlwaysOnTop = true
-        gui.ResetOnSpawn = false
-        gui.Size = UDim2.fromOffset(90, 26)
-        gui.StudsOffset = Vector3.new(0, 5, 0)
-        local label = Instance.new("TextLabel")
-        label.Name = "Label"
-        label.Size = UDim2.fromScale(1, 1)
-        label.BackgroundColor3 = Color3.fromRGB(43, 255, 172)
-        label.BackgroundTransparency = 0.15
-        label.TextColor3 = Color3.fromRGB(23, 21, 18)
-        label.Font = Enum.Font.GothamBold
-        label.TextScaled = true
-        label.Parent = gui
-        gui.Parent = MystrixHub.PlayerController.PlayerGui
-        MystrixHub.TargetGui = gui
-        MystrixHub.ConnectionController.Insert({ Disconnect = function()
-            gui:Destroy()
-        end })
-    end
-    local adornee, text
-    if T.Goal or not T.Model then
-        local part = MystrixHub.TargetPart
-        if not (part and part.Parent) then
-            part = Instance.new("Part")
-            part.Name = "MystrixTargetPart"
-            part.Anchored = true
-            part.CanCollide = false
-            part.CanQuery = false
-            part.CanTouch = false
-            part.Transparency = 1
-            part.Size = Vector3.new(1, 1, 1)
-            part.Parent = workspace
-            MystrixHub.TargetPart = part
-            MystrixHub.ConnectionController.Insert({ Disconnect = function()
-                part:Destroy()
-            end })
-        end
+    local best
+    if root and type(team) == "string" then
         local goal = F.SilentAimGoal()
-        if goal then
-            part.Position = Vector3.new(goal.x, goal.ground + (goal.top - goal.ground) * 0.5, goal.z)
-        end
-        adornee, text = part, "GOAL"
-    else
-        adornee, text = T.Model:FindFirstChild("Root"), "TARGET"
-    end
-    gui.Adornee = adornee
-    gui.Label.Text = text
-    gui.Enabled = adornee ~= nil
-end
-
-function MystrixHub.Functions.CycleTarget()
-    local F = MystrixHub.Functions
-    local T = getgenv().MystrixTarget
-    if not T.Enabled then return end
-    local list = F.TargetCandidates()
-    local index
-    for i, item in ipairs(list) do
-        if item.model == T.Model then
-            index = i
-            break
-        end
-    end
-    local nextItem = list[(T.Goal and 0 or (index or 0)) + 1]
-    if nextItem then
-        T.Goal = false
-        T.Model = nextItem.model
-    else
-        T.Goal = true
-        T.Model = nil
-    end
-    F.UpdateTargetMarker()
-end
-
-function MystrixHub.Functions.SetTargeting(state)
-    local F = MystrixHub.Functions
-    local T = getgenv().MystrixTarget
-    T.Enabled = state == true
-    T.Goal = true
-    T.Model = nil
-    if MystrixHub.TargetConn then
-        MystrixHub.TargetConn:Disconnect()
-        MystrixHub.TargetConn = nil
-    end
-    if T.Enabled then
-        local acc = 0
-        MystrixHub.TargetConn = RunService.Heartbeat:Connect(function(dt)
-            acc += dt
-            if acc < 0.25 then return end
-            acc = 0
-            local t = getgenv().MystrixTarget
-            if not t.Goal and not (t.Model and t.Model.Parent) then
-                t.Goal = true
-                t.Model = nil
+        local ball = F.GetBall()
+        local line
+        if cfg.Offside and goal then
+            local ballPos = ball and ball.Position or root.Position
+            local top1, top2 = -math.huge, -math.huge
+            for _, e in ipairs(F.MannequinSnapshot()) do
+                if e.model ~= char and type(e.team) == "string" and e.team ~= team then
+                    local p = e.pos.X * goal.out
+                    if p > top1 then
+                        top2 = top1
+                        top1 = p
+                    elseif p > top2 then
+                        top2 = p
+                    end
+                end
             end
-            MystrixHub.Functions.UpdateTargetMarker()
-        end)
-        MystrixHub.ConnectionController.Insert(MystrixHub.TargetConn)
+            line = math.max(top2, ballPos.X * goal.out) + 0.5
+        end
+        local look = root.CFrame.LookVector
+        local face = Vector3.new(look.X, 0, look.Z)
+        face = face.Magnitude > 0.01 and face.Unit or Vector3.new(0, 0, -1)
+        local bestScore = math.huge
+        for _, model in ipairs(Services.CollectionService:GetTagged("MannequinCharacter")) do
+            if model ~= char and model:IsA("Model") and model:GetAttribute("Team") == team then
+                local call = model:GetAttribute("Call")
+                local r = model:FindFirstChild("Root")
+                local state = model:GetAttribute("BodyState")
+                if type(call) == "number" and call ~= 0 and r and r:IsA("BasePart") and (state == nil or state == "Animated") then
+                    local offside = line and goal and r.Position.X * goal.out > line
+                    if not offside then
+                        local diff = r.Position - root.Position
+                        local flat = Vector3.new(diff.X, 0, diff.Z)
+                        local d = flat.Magnitude
+                        if d >= 3 then
+                            local angle = math.acos(math.clamp(face:Dot(flat.Unit), -1, 1))
+                            local score = angle * 12 + d * 0.08
+                            if score < bestScore then
+                                bestScore = score
+                                best = r
+                            end
+                        end
+                    end
+                end
+            end
+        end
     end
-    F.UpdateTargetMarker()
+    MystrixHub.CallPassCache = { At = now, Char = char, Root = best }
+    return best
 end
 
-function MystrixHub.Functions.TargetDir(x, z)
-    local T = getgenv().MystrixTarget
-    if not T.Enabled or T.Goal or not T.Model then return nil end
-    local root = T.Model:FindFirstChild("Root")
-    if not (root and root.Parent) then return nil end
-    local v = root.AssemblyLinearVelocity
-    local dx = root.Position.X + v.X * 0.5 - x
-    local dz = root.Position.Z + v.Z * 0.5 - z
+function MystrixHub.Functions.CallPassFor(x, z)
+    local F = MystrixHub.Functions
+    local cfg = getgenv().MystrixCallPass
+    if not cfg.Enabled then return nil end
+    local r = F.CallPassTarget()
+    if not (r and r.Parent) then return nil end
+    local goal = F.SilentAimGoal()
+    if goal then
+        local gx, gz = goal.x - x, goal.z - z
+        if gx * gx + gz * gz <= cfg.GoalRange * cfg.GoalRange then return nil end
+    end
+    return r
+end
+
+function MystrixHub.Functions.CallPassDir(x, z)
+    local r = MystrixHub.Functions.CallPassFor(x, z)
+    if not r then return nil end
+    local v = r.AssemblyLinearVelocity
+    local dx = r.Position.X + v.X * 0.5 - x
+    local dz = r.Position.Z + v.Z * 0.5 - z
     local m = math.sqrt(dx * dx + dz * dz)
     if m < 1.5 then return nil end
     return Vector3.new(dx / m, 0, dz / m)
@@ -4163,12 +4111,8 @@ end
 
 function MystrixHub.Functions.KickAimDir(x, z, intent)
     local F = MystrixHub.Functions
-    local T = getgenv().MystrixTarget
-    if T.Enabled then
-        if T.Goal then return F.KickGoalDir(x, z) end
-        local dir = F.TargetDir(x, z)
-        if dir then return dir end
-    end
+    local dir = F.CallPassDir(x, z)
+    if dir then return dir end
     local state = getgenv().MystrixSilentAim
     if state.Enabled and state.OnlyGoalShots ~= true and (intent == "Shoot" or intent == "Lob") then
         return F.KickGoalDir(x, z)
@@ -5703,10 +5647,7 @@ getgenv().MystrixHitbox = getgenv().MystrixHitbox or { Enabled = false, Size = 1
 getgenv().MystrixHitbox.Enabled = false
 getgenv().MystrixHitbox.Hooked = false
 
-getgenv().MystrixTarget = getgenv().MystrixTarget or { Enabled = false, Goal = true, Model = nil }
-getgenv().MystrixTarget.Enabled = false
-getgenv().MystrixTarget.Goal = true
-getgenv().MystrixTarget.Model = nil
+
 
 MystrixHub.HitboxParts = {
     LeftFoot = true, RightFoot = true, LeftShin = true, RightShin = true,
@@ -5765,9 +5706,15 @@ local PlayerTab = Window:Tab({
     Icon = "lucide:user-round",
 })
 
+local KeeperTab = Window:Tab({
+    Name = "Keeper",
+    Icon = "lucide:shield-half",
+})
+
 MystrixHub.UIController.Tabs.Combat = CombatTab
 MystrixHub.UIController.Tabs.Player = PlayerTab
 MystrixHub.UIController.Tabs.Ball = BallTab
+MystrixHub.UIController.Tabs.Keeper = KeeperTab
 
 local SilentAimSection = CombatTab:Section({
     Name = "Silent Aim",
@@ -5777,6 +5724,7 @@ local SilentAimSection = CombatTab:Section({
 
 SilentAimSection:Dropdown({
     Name = "Silent Aim Target",
+    Description = "Where in the goal shots are aimed.",
     Options = { "Auto", "Top Right Corner", "Bottom Right Corner", "Top Left Corner", "Bottom Left Corner", "Top Center", "Bottom Center", "Upper Right", "Upper Left", "Lower Right", "Lower Left", "Right Post", "Left Post", "Middle" },
     Default = { "Auto" },
     Multi = true,
@@ -5787,6 +5735,7 @@ SilentAimSection:Dropdown({
 
 SilentAimSection:Slider({
     Name = "Silent Aim Range",
+    Description = "Max distance from goal to redirect shots.",
     Min = 20,
     Max = 300,
     Suffix = "st",
@@ -5798,6 +5747,7 @@ SilentAimSection:Slider({
 
 SilentAimSection:Toggle({
     Name = "Silent Aim",
+    Description = "Redirects your shots toward the goal.",
     Keybind = Enum.KeyCode.H,
     Default = false,
     Callback = function(state)
@@ -5821,6 +5771,7 @@ SilentAimSection:Toggle({
 
 SilentAimSection:Toggle({
     Name = "Only Goal Shots",
+    Description = "Only redirects shots aimed near the goal.",
     Default = SilentAimState.OnlyGoalShots,
     Callback = function(state)
         local SA = getgenv().MystrixSilentAim
@@ -5832,6 +5783,7 @@ SilentAimSection:Toggle({
 
 SilentAimSection:Slider({
     Name = "Goal Shot Tolerance",
+    Description = "How loosely a shot counts as goal-bound.",
     Min = 0,
     Max = 100,
     Suffix = "%",
@@ -5845,6 +5797,7 @@ SilentAimSection:Slider({
 
 SilentAimSection:Toggle({
     Name = "Auto Curve",
+    Description = "Adds curve to shots to beat the keeper.",
     Default = false,
     Callback = function(state)
         getgenv().MystrixSilentAim.AutoCurve = state
@@ -5853,273 +5806,13 @@ SilentAimSection:Toggle({
 
 SilentAimSection:Slider({
     Name = "Curve Strength",
+    Description = "How much curve is applied.",
     Min = 50,
     Max = 100,
     Suffix = "%",
     Default = 100,
     Callback = function(value)
         getgenv().MystrixSilentAim.CurveAmount = value / 100
-    end,
-})
-
-local KeeperSection = BallTab:Section({
-    Name = "Goalkeeper",
-    Icon = "lucide:shield-half",
-    Side = 2,
-})
-
-KeeperSection:Toggle({
-    Name = "Auto Goalkeeper",
-    Default = false,
-    Callback = function(state)
-        local GK = getgenv().MystrixKeeper
-        GK.Enabled = state
-        if state then
-            if not MystrixHub.Functions.StartKeeper() then
-                GK.Enabled = false
-            end
-        else
-            MystrixHub.Functions.StopKeeper()
-        end
-    end,
-})
-
-KeeperSection:Toggle({
-    Name = "Keeper Dive / Slide",
-    Default = true,
-    Callback = function(state)
-        getgenv().MystrixKeeper.Dive = state
-    end,
-})
-
-KeeperSection:Toggle({
-    Name = "Keeper Rush Out",
-    Default = true,
-    Callback = function(state)
-        getgenv().MystrixKeeper.Rush = state
-    end,
-})
-
-KeeperSection:Toggle({
-    Name = "Keeper Gather Loose Balls",
-    Default = true,
-    Callback = function(state)
-        getgenv().MystrixKeeper.Gather = state
-    end,
-})
-
-KeeperSection:Toggle({
-    Name = "Keeper Poke",
-    Default = true,
-    Callback = function(state)
-        getgenv().MystrixKeeper.Poke = state
-    end,
-})
-
-KeeperSection:Slider({
-    Name = "Keeper Depth",
-    Min = 2,
-    Max = 12,
-    Suffix = "st",
-    Default = 4.5,
-    Decimals = 1,
-    Callback = function(value)
-        getgenv().MystrixKeeper.Depth = value
-    end,
-})
-
-KeeperSection:Slider({
-    Name = "Keeper Dive Range",
-    Min = 6,
-    Max = 22,
-    Suffix = "st",
-    Default = 22,
-    Callback = function(value)
-        getgenv().MystrixKeeper.DiveRange = value
-    end,
-})
-
-KeeperSection:Slider({
-    Name = "Dive Commit Range",
-    Min = 15,
-    Max = 90,
-    Suffix = "st",
-    Default = 45,
-    Callback = function(value)
-        getgenv().MystrixKeeper.CommitRange = value
-    end,
-})
-
-KeeperSection:Slider({
-    Name = "Keeper Rush Range",
-    Min = 15,
-    Max = 60,
-    Suffix = "st",
-    Default = 34,
-    Callback = function(value)
-        getgenv().MystrixKeeper.RushRange = value
-    end,
-})
-
-KeeperSection:Slider({
-    Name = "Dive Timing Offset",
-    Min = 0,
-    Max = 25,
-    Suffix = "cs",
-    Default = 3,
-    Callback = function(value)
-        getgenv().MystrixKeeper.Lead = value / 100
-    end,
-})
-
-KeeperSection:Slider({
-    Name = "Dive Arm Reach",
-    Min = 2,
-    Max = 12,
-    Suffix = "st",
-    Default = 3.4,
-    Decimals = 1,
-    Callback = function(value)
-        getgenv().MystrixKeeper.ArmReach = value
-    end,
-})
-
-KeeperSection:Slider({
-    Name = "Keeper Stand Reach",
-    Min = 0.5,
-    Max = 8,
-    Suffix = "st",
-    Default = 2,
-    Decimals = 1,
-    Callback = function(value)
-        getgenv().MystrixKeeper.StandReach = value
-    end,
-})
-
-KeeperSection:Dropdown({
-    Name = "Dive Style",
-    Options = { "Auto", "Lateral", "Back", "Outside" },
-    Default = "Auto",
-    Multi = false,
-    Callback = function(value)
-        local v = type(value) == "table" and (value[1] or next(value)) or value
-        if type(v) == "string" then
-            getgenv().MystrixKeeper.DiveStyle = v
-        end
-    end,
-})
-
-KeeperSection:Slider({
-    Name = "Predive Aggression",
-    Min = 0,
-    Max = 30,
-    Suffix = "cs",
-    Default = 10,
-    Callback = function(value)
-        getgenv().MystrixKeeper.Predive = value / 100
-    end,
-})
-
-KeeperSection:Slider({
-    Name = "Long Shot Aggression",
-    Min = 0,
-    Max = 100,
-    Suffix = "%",
-    Default = 50,
-    Callback = function(value)
-        getgenv().MystrixKeeper.LongAggr = value / 100
-    end,
-})
-
-KeeperSection:Slider({
-    Name = "Dive Start Boost",
-    Min = 0,
-    Max = 30,
-    Suffix = "st",
-    Default = 10,
-    Callback = function(value)
-        getgenv().MystrixKeeper.DiveBoost = value
-    end,
-})
-
-KeeperSection:Slider({
-    Name = "Dive Vertical Reach",
-    Min = 1,
-    Max = 8,
-    Suffix = "st",
-    Default = 2.8,
-    Decimals = 1,
-    Callback = function(value)
-        getgenv().MystrixKeeper.VReach = value
-    end,
-})
-
-KeeperSection:Slider({
-    Name = "Catch Height",
-    Min = 4,
-    Max = 10,
-    Suffix = "st",
-    Default = 6.6,
-    Decimals = 1,
-    Callback = function(value)
-        getgenv().MystrixKeeper.ReachHeight = value
-    end,
-})
-
-local KeeperBodySection = BallTab:Section({
-    Name = "Keeper Body",
-    Icon = "lucide:shield-plus",
-    Side = 2,
-})
-
-KeeperBodySection:Toggle({
-    Name = "Body Expander",
-    Default = false,
-    Callback = function(state)
-        local B = getgenv().MystrixKeeperBody
-        B.Enabled = state
-        if state then
-            if not MystrixHub.Functions.StartKeeperBody() then
-                B.Enabled = false
-            end
-        else
-            MystrixHub.Functions.StopKeeperBody()
-        end
-    end,
-})
-
-KeeperBodySection:Toggle({
-    Name = "Auto Catch Boost",
-    Default = false,
-    Callback = function(state)
-        getgenv().MystrixKeeperBody.Catch = state
-        MystrixHub.Functions.ApplyKeeperBody()
-    end,
-})
-
-KeeperBodySection:Slider({
-    Name = "Torso Hitbox",
-    Min = 0,
-    Max = 6,
-    Suffix = "st",
-    Default = 1.4,
-    Decimals = 1,
-    Callback = function(value)
-        getgenv().MystrixKeeperBody.Torso = value
-        MystrixHub.Functions.ApplyKeeperBody()
-    end,
-})
-
-KeeperBodySection:Slider({
-    Name = "Arm Hitbox",
-    Min = 0,
-    Max = 6,
-    Suffix = "st",
-    Default = 1.2,
-    Decimals = 1,
-    Callback = function(value)
-        getgenv().MystrixKeeperBody.Arm = value
-        MystrixHub.Functions.ApplyKeeperBody()
     end,
 })
 
@@ -6131,6 +5824,7 @@ local PowerSection = CombatTab:Section({
 
 PowerSection:Toggle({
     Name = "Auto Max",
+    Description = "Every kick uses full power.",
     Keybind = Enum.KeyCode.B,
     Default = false,
     Callback = function(state)
@@ -6151,129 +5845,6 @@ PowerSection:Toggle({
     end,
 })
 
-local SprintSection = PlayerTab:Section({
-    Name = "Sprint",
-    Icon = "lucide:footprints",
-    Side = 1,
-})
-
-SprintSection:Toggle({
-    Name = "Infinite Sprint",
-    Keybind = Enum.KeyCode.N,
-    Default = false,
-    Callback = function(state)
-        getgenv().MystrixSprint.Infinite = state
-        MystrixHub.Functions.RefreshRunSpeed()
-    end,
-})
-
-SprintSection:Toggle({
-    Name = "Auto Sprint",
-    Default = false,
-    Callback = function(state)
-        getgenv().MystrixSprint.Auto = state
-        if state then
-            MystrixHub.Functions.StartAutoSprint()
-        else
-            MystrixHub.Functions.StopAutoSprint()
-        end
-    end,
-})
-
-SprintSection:Slider({
-    Name = "Sprint Speed",
-    Min = 100,
-    Max = 160,
-    Default = 100,
-    Suffix = "%",
-    Callback = function(value)
-        getgenv().MystrixSprint.Boost = value / 100
-        MystrixHub.Functions.RefreshRunSpeed()
-    end,
-})
-
-local RagdollSection = PlayerTab:Section({
-    Name = "Ragdoll",
-    Icon = "lucide:shield",
-    Side = 2,
-})
-
-RagdollSection:Toggle({
-    Name = "Anti-Tackle",
-    Default = false,
-    Callback = function(state)
-        if state and not MystrixHub.Functions.InstallAntiRagdoll() then
-            MystrixHub.Functions.SetAntiTackle(false)
-            return
-        end
-        MystrixHub.Functions.SetAntiTackle(state)
-    end,
-})
-
-RagdollSection:Toggle({
-    Name = "Instant Get Up",
-    Default = false,
-    Callback = function(state)
-        if state and not MystrixHub.Functions.InstallAntiRagdoll() then
-            MystrixHub.Functions.SetInstantGetUp(false)
-            return
-        end
-        MystrixHub.Functions.SetInstantGetUp(state)
-    end,
-})
-
-local PokeSection = PlayerTab:Section({
-    Name = "Poke",
-    Icon = "lucide:hand",
-    Side = 1,
-})
-
-PokeSection:Toggle({
-    Name = "Auto Poke",
-    Default = false,
-    Callback = function(state)
-        local AP = getgenv().MystrixAutoPoke
-        AP.Enabled = state
-        if state then
-            MystrixHub.Functions.StartAutoPoke()
-        else
-            MystrixHub.Functions.StopAutoPoke()
-        end
-    end,
-})
-
-PokeSection:Slider({
-    Name = "Poke Range",
-    Min = 3,
-    Max = 12,
-    Suffix = "st",
-    Default = 6,
-    Decimals = 1,
-    Callback = function(value)
-        getgenv().MystrixAutoPoke.Range = value
-    end,
-})
-
-local CooldownSection = PlayerTab:Section({
-    Name = "Cooldown",
-    Icon = "lucide:timer",
-    Side = 2,
-})
-
-CooldownSection:Toggle({
-    Name = "No Tackle / Poke Cooldown",
-    Default = false,
-    Callback = function(state)
-        local NC = getgenv().MystrixNoCooldown
-        NC.Enabled = state
-        if state then
-            MystrixHub.Functions.StartNoCooldown()
-        else
-            MystrixHub.Functions.StopNoCooldown()
-        end
-    end,
-})
-
 local ShootingSection = CombatTab:Section({
     Name = "Shooting",
     Icon = "lucide:goal",
@@ -6282,6 +5853,7 @@ local ShootingSection = CombatTab:Section({
 
 ShootingSection:Toggle({
     Name = "Auto Shoot",
+    Description = "Shoots automatically when in range.",
     Keybind = Enum.KeyCode.K,
     Default = false,
     Callback = function(state)
@@ -6303,12 +5875,531 @@ ShootingSection:Toggle({
 
 ShootingSection:Slider({
     Name = "Shoot Distance",
+    Description = "Max distance from goal to auto shoot.",
     Min = 10,
     Max = 150,
     Default = 60,
     Suffix = "st",
     Callback = function(value)
         getgenv().MystrixAutoShoot.Range = value
+    end,
+})
+
+local DefenseSection = CombatTab:Section({
+    Name = "Defense",
+    Icon = "lucide:shield-check",
+    Side = 2,
+})
+
+DefenseSection:Toggle({
+    Name = "Auto Guard",
+    Description = "Auto positions you between ball and goal.",
+    Keybind = Enum.KeyCode.M,
+    Default = false,
+    Callback = function(state)
+        local GD = getgenv().MystrixGuard
+        GD.Enabled = state
+        if state then
+            MystrixHub.Functions.StartGuard()
+        else
+            MystrixHub.Functions.StopGuard()
+        end
+    end,
+})
+
+DefenseSection:Slider({
+    Name = "Guard Distance",
+    Description = "How far you stand from the ball.",
+    Min = 2,
+    Max = 20,
+    Suffix = "st",
+    Default = 8,
+    Callback = function(value)
+        getgenv().MystrixGuard.Distance = value
+    end,
+})
+
+DefenseSection:Slider({
+    Name = "Guard Prediction",
+    Description = "How far ahead the ball is predicted.",
+    Min = 0.1,
+    Max = 1,
+    Default = 0.35,
+    Suffix = "s",
+    Decimals = 2,
+    Callback = function(value)
+        getgenv().MystrixGuard.Predict = value
+    end,
+})
+
+DefenseSection:Slider({
+    Name = "Guard Engage Range",
+    Description = "Distance at which you chase the ball.",
+    Min = 8,
+    Max = 45,
+    Suffix = "st",
+    Default = 22,
+    Callback = function(value)
+        getgenv().MystrixGuard.Engage = value
+    end,
+})
+
+DefenseSection:Toggle({
+    Name = "Ignore Teammates",
+    Description = "Doesn't chase teammates with the ball.",
+    Default = true,
+    Callback = function(state)
+        getgenv().MystrixGuard.IgnoreTeammates = state
+    end,
+})
+
+local SkillsSection = CombatTab:Section({
+    Name = "Tricks",
+    Icon = "lucide:wand-sparkles",
+    Side = 1,
+})
+
+SkillsSection:Dropdown({
+    Name = "Trick Select",
+    Description = "Which tricks Auto Tricks will use.",
+    Options = MystrixHub.TrickOptions,
+    Default = { "Auto" },
+    Multi = true,
+    Callback = function(value)
+        MystrixHub.Functions.SetTrickSelection(value)
+    end,
+})
+
+SkillsSection:Toggle({
+    Name = "Auto Tricks",
+    Description = "Performs tricks automatically.",
+    Default = false,
+    Callback = function(state)
+        local AT = getgenv().MystrixAutoTricks
+        if state then
+            if not MystrixHub.Functions.InstallSilentAim() then
+                AT.Enabled = false
+                return
+            end
+            pcall(MystrixHub.Functions.InstallMaxPower)
+            if not MystrixHub.Functions.StartAutoTricks() then
+                AT.Enabled = false
+                return
+            end
+            AT.Enabled = true
+        else
+            AT.Enabled = false
+            MystrixHub.Functions.StopAutoTricks()
+        end
+    end,
+})
+
+SkillsSection:Slider({
+    Name = "Tricks Range",
+    Description = "Max distance from goal for tricks.",
+    Min = 20,
+    Max = 120,
+    Default = 70,
+    Suffix = "st",
+    Callback = function(value)
+        getgenv().MystrixAutoTricks.Range = value
+    end,
+})
+
+SkillsSection:Slider({
+    Name = "Defender Distance",
+    Description = "Defender distance that triggers a skill.",
+    Min = 6,
+    Max = 30,
+    Default = 14,
+    Suffix = "st",
+    Callback = function(value)
+        getgenv().MystrixAutoTricks.Defender = value
+    end,
+})
+
+local DribbleSection = CombatTab:Section({
+    Name = "Dribble",
+    Icon = "lucide:footprints",
+    Side = 1,
+})
+
+DribbleSection:Toggle({
+    Name = "Auto Dribble",
+    Description = "Uses skill moves against nearby defenders.",
+    Default = false,
+    Callback = function(state)
+        local AD = getgenv().MystrixAutoDribble
+        if state then
+            if not MystrixHub.Functions.SkillModule() then
+                AD.Enabled = false
+                return
+            end
+            AD.Enabled = true
+            MystrixHub.Functions.StartAutoDribble()
+        else
+            AD.Enabled = false
+            MystrixHub.Functions.StopAutoDribble()
+        end
+    end,
+})
+
+DribbleSection:Slider({
+    Name = "Dribble Range",
+    Description = "Defender distance that triggers dribbling.",
+    Min = 6,
+    Max = 20,
+    Suffix = "st",
+    Default = 12,
+    Callback = function(value)
+        getgenv().MystrixAutoDribble.Range = value
+    end,
+})
+
+DribbleSection:Toggle({
+    Name = "Dribble Evade",
+    Description = "Steers you away from defenders.",
+    Default = true,
+    Callback = function(state)
+        getgenv().MystrixAutoDribble.Evade = state
+    end,
+})
+
+DribbleSection:Slider({
+    Name = "Evade Strength",
+    Description = "How hard you steer away.",
+    Min = 30,
+    Max = 100,
+    Suffix = "%",
+    Default = 80,
+    Callback = function(value)
+        getgenv().MystrixAutoDribble.EvadeStrength = value / 100
+    end,
+})
+
+local CallPassSection = CombatTab:Section({
+    Name = "Call Pass",
+    Icon = "lucide:locate-fixed",
+    Side = 2,
+})
+
+CallPassSection:Toggle({
+    Name = "Call Pass",
+    Description = "Kicks go to the teammate calling for the ball.",
+    Default = false,
+    Callback = function(state)
+        local CP = getgenv().MystrixCallPass
+        if state and not MystrixHub.Functions.InstallSilentAim() then
+            CP.Enabled = false
+            return
+        end
+        CP.Enabled = state
+        MystrixHub.CallPassCache = nil
+    end,
+})
+
+CallPassSection:Toggle({
+    Name = "Offside Check",
+    Description = "Skips teammates who would be offside.",
+    Default = true,
+    Callback = function(state)
+        getgenv().MystrixCallPass.Offside = state
+        MystrixHub.CallPassCache = nil
+    end,
+})
+
+CallPassSection:Slider({
+    Name = "Goal Priority Range",
+    Description = "Inside this range you shoot normally.",
+    Min = 0,
+    Max = 100,
+    Suffix = "st",
+    Default = 25,
+    Callback = function(value)
+        getgenv().MystrixCallPass.GoalRange = value
+    end,
+})
+
+local KeeperSection = KeeperTab:Section({
+    Name = "Goalkeeper",
+    Icon = "lucide:shield-half",
+    Side = 1,
+})
+
+KeeperSection:Toggle({
+    Name = "Auto Goalkeeper",
+    Description = "Controls your keeper automatically.",
+    Default = false,
+    Callback = function(state)
+        local GK = getgenv().MystrixKeeper
+        GK.Enabled = state
+        if state then
+            if not MystrixHub.Functions.StartKeeper() then
+                GK.Enabled = false
+            end
+        else
+            MystrixHub.Functions.StopKeeper()
+        end
+    end,
+})
+
+KeeperSection:Dropdown({
+    Name = "Dive Style",
+    Description = "Direction keeper dives lean toward.",
+    Options = { "Auto", "Lateral", "Back", "Outside" },
+    Default = "Auto",
+    Multi = false,
+    Callback = function(value)
+        local v = type(value) == "table" and (value[1] or next(value)) or value
+        if type(v) == "string" then
+            getgenv().MystrixKeeper.DiveStyle = v
+        end
+    end,
+})
+
+KeeperSection:Toggle({
+    Name = "Keeper Dive / Slide",
+    Description = "Allows dives, jumps and slides.",
+    Default = true,
+    Callback = function(state)
+        getgenv().MystrixKeeper.Dive = state
+    end,
+})
+
+KeeperSection:Toggle({
+    Name = "Keeper Rush Out",
+    Description = "Charges out at attackers near goal.",
+    Default = true,
+    Callback = function(state)
+        getgenv().MystrixKeeper.Rush = state
+    end,
+})
+
+KeeperSection:Toggle({
+    Name = "Keeper Gather Loose Balls",
+    Description = "Collects loose balls in the box.",
+    Default = true,
+    Callback = function(state)
+        getgenv().MystrixKeeper.Gather = state
+    end,
+})
+
+KeeperSection:Toggle({
+    Name = "Keeper Poke",
+    Description = "Pokes the ball off nearby carriers.",
+    Default = true,
+    Callback = function(state)
+        getgenv().MystrixKeeper.Poke = state
+    end,
+})
+
+KeeperSection:Slider({
+    Name = "Keeper Depth",
+    Description = "How far off the goal line you stand.",
+    Min = 2,
+    Max = 12,
+    Suffix = "st",
+    Default = 4.5,
+    Decimals = 1,
+    Callback = function(value)
+        getgenv().MystrixKeeper.Depth = value
+    end,
+})
+
+KeeperSection:Slider({
+    Name = "Keeper Dive Range",
+    Description = "Max sideways distance for a dive.",
+    Min = 6,
+    Max = 22,
+    Suffix = "st",
+    Default = 22,
+    Callback = function(value)
+        getgenv().MystrixKeeper.DiveRange = value
+    end,
+})
+
+KeeperSection:Slider({
+    Name = "Dive Commit Range",
+    Description = "Max ball distance to start diving.",
+    Min = 15,
+    Max = 90,
+    Suffix = "st",
+    Default = 45,
+    Callback = function(value)
+        getgenv().MystrixKeeper.CommitRange = value
+    end,
+})
+
+KeeperSection:Slider({
+    Name = "Keeper Rush Range",
+    Description = "Max distance to rush out.",
+    Min = 15,
+    Max = 60,
+    Suffix = "st",
+    Default = 34,
+    Callback = function(value)
+        getgenv().MystrixKeeper.RushRange = value
+    end,
+})
+
+KeeperSection:Slider({
+    Name = "Dive Timing Offset",
+    Description = "Shifts when the dive fires.",
+    Min = 0,
+    Max = 25,
+    Suffix = "cs",
+    Default = 3,
+    Callback = function(value)
+        getgenv().MystrixKeeper.Lead = value / 100
+    end,
+})
+
+KeeperSection:Slider({
+    Name = "Dive Arm Reach",
+    Description = "Assumed arm reach during dives.",
+    Min = 2,
+    Max = 12,
+    Suffix = "st",
+    Default = 3.4,
+    Decimals = 1,
+    Callback = function(value)
+        getgenv().MystrixKeeper.ArmReach = value
+    end,
+})
+
+KeeperSection:Slider({
+    Name = "Keeper Stand Reach",
+    Description = "Reach before a dive is needed.",
+    Min = 0.5,
+    Max = 8,
+    Suffix = "st",
+    Default = 2,
+    Decimals = 1,
+    Callback = function(value)
+        getgenv().MystrixKeeper.StandReach = value
+    end,
+})
+
+KeeperSection:Slider({
+    Name = "Predive Aggression",
+    Description = "Dives earlier on fast shots.",
+    Min = 0,
+    Max = 30,
+    Suffix = "cs",
+    Default = 10,
+    Callback = function(value)
+        getgenv().MystrixKeeper.Predive = value / 100
+    end,
+})
+
+KeeperSection:Slider({
+    Name = "Long Shot Aggression",
+    Description = "Extra reach on long-range shots.",
+    Min = 0,
+    Max = 100,
+    Suffix = "%",
+    Default = 50,
+    Callback = function(value)
+        getgenv().MystrixKeeper.LongAggr = value / 100
+    end,
+})
+
+KeeperSection:Slider({
+    Name = "Dive Start Boost",
+    Description = "Extra push at the start of a dive.",
+    Min = 0,
+    Max = 30,
+    Suffix = "st",
+    Default = 10,
+    Callback = function(value)
+        getgenv().MystrixKeeper.DiveBoost = value
+    end,
+})
+
+KeeperSection:Slider({
+    Name = "Dive Vertical Reach",
+    Description = "Height tolerance for dive saves.",
+    Min = 1,
+    Max = 8,
+    Suffix = "st",
+    Default = 2.8,
+    Decimals = 1,
+    Callback = function(value)
+        getgenv().MystrixKeeper.VReach = value
+    end,
+})
+
+KeeperSection:Slider({
+    Name = "Catch Height",
+    Description = "Max ball height the keeper goes for.",
+    Min = 4,
+    Max = 10,
+    Suffix = "st",
+    Default = 6.6,
+    Decimals = 1,
+    Callback = function(value)
+        getgenv().MystrixKeeper.ReachHeight = value
+    end,
+})
+
+local KeeperBodySection = KeeperTab:Section({
+    Name = "Keeper Body",
+    Icon = "lucide:shield-plus",
+    Side = 2,
+})
+
+KeeperBodySection:Toggle({
+    Name = "Body Expander",
+    Description = "Enlarges keeper hitboxes.",
+    Default = false,
+    Callback = function(state)
+        local B = getgenv().MystrixKeeperBody
+        B.Enabled = state
+        if state then
+            if not MystrixHub.Functions.StartKeeperBody() then
+                B.Enabled = false
+            end
+        else
+            MystrixHub.Functions.StopKeeperBody()
+        end
+    end,
+})
+
+KeeperBodySection:Toggle({
+    Name = "Auto Catch Boost",
+    Description = "Makes catching easier.",
+    Default = false,
+    Callback = function(state)
+        getgenv().MystrixKeeperBody.Catch = state
+        MystrixHub.Functions.ApplyKeeperBody()
+    end,
+})
+
+KeeperBodySection:Slider({
+    Name = "Torso Hitbox",
+    Description = "Extra torso hitbox size.",
+    Min = 0,
+    Max = 6,
+    Suffix = "st",
+    Default = 1.4,
+    Decimals = 1,
+    Callback = function(value)
+        getgenv().MystrixKeeperBody.Torso = value
+        MystrixHub.Functions.ApplyKeeperBody()
+    end,
+})
+
+KeeperBodySection:Slider({
+    Name = "Arm Hitbox",
+    Description = "Extra arm hitbox size.",
+    Min = 0,
+    Max = 6,
+    Suffix = "st",
+    Default = 1.2,
+    Decimals = 1,
+    Callback = function(value)
+        getgenv().MystrixKeeperBody.Arm = value
+        MystrixHub.Functions.ApplyKeeperBody()
     end,
 })
 
@@ -6320,6 +6411,7 @@ local ReachSection = BallTab:Section({
 
 ReachSection:Toggle({
     Name = "Extended Ball Reach",
+    Description = "Moves you to low balls out of reach.",
     Default = false,
     Callback = function(state)
         local R = getgenv().MystrixReach
@@ -6332,6 +6424,7 @@ ReachSection:Toggle({
 
 ReachSection:Slider({
     Name = "Reach Added",
+    Description = "Extra distance added to ball reach.",
     Min = 1,
     Max = 8,
     Suffix = "st",
@@ -6350,6 +6443,7 @@ local PickupSection = BallTab:Section({
 
 PickupSection:Toggle({
     Name = "Auto Pickup",
+    Description = "Runs to loose balls nearby.",
     Default = false,
     Callback = function(state)
         local AP = getgenv().MystrixAutoPickup
@@ -6364,6 +6458,7 @@ PickupSection:Toggle({
 
 PickupSection:Slider({
     Name = "Pickup Range",
+    Description = "Max distance to chase loose balls.",
     Min = 5,
     Max = 60,
     Suffix = "st",
@@ -6376,11 +6471,12 @@ PickupSection:Slider({
 local TrackerSection = BallTab:Section({
     Name = "Ball Tracker",
     Icon = "lucide:radar",
-    Side = 1,
+    Side = 2,
 })
 
 local TrackerToggle = TrackerSection:Toggle({
     Name = "Ball Tracker",
+    Description = "Shows the ball's predicted path.",
     Keybind = Enum.KeyCode.J,
     Default = false,
     Callback = function(state)
@@ -6408,6 +6504,7 @@ for _, name in ipairs({ "Colorpicker", "ColorPicker" }) do
         pickerMade = pcall(function()
             TrackerToggle[name](TrackerToggle, {
                 Name = "Tracker Color",
+                Description = "Color of the tracker line.",
                 Default = getgenv().MystrixTracker.Color,
                 Callback = trackerColorCallback,
             })
@@ -6419,6 +6516,7 @@ for _, name in ipairs({ "Colorpicker", "ColorPicker" }) do
         pickerMade = pcall(function()
             TrackerSection[name](TrackerSection, {
                 Name = "Tracker Color",
+                Description = "Color of the tracker line.",
                 Default = getgenv().MystrixTracker.Color,
                 Callback = trackerColorCallback,
             })
@@ -6428,6 +6526,7 @@ end
 
 TrackerSection:Slider({
     Name = "Tracker Refresh",
+    Description = "How often the path updates.",
     Min = 0.15,
     Max = 0.6,
     Default = 0.25,
@@ -6438,220 +6537,15 @@ TrackerSection:Slider({
     end,
 })
 
-local DefenseSection = CombatTab:Section({
-    Name = "Defense",
-    Icon = "lucide:shield-check",
-    Side = 2,
-})
-
-DefenseSection:Toggle({
-    Name = "Auto Guard",
-    Keybind = Enum.KeyCode.M,
-    Default = false,
-    Callback = function(state)
-        local GD = getgenv().MystrixGuard
-        GD.Enabled = state
-        if state then
-            MystrixHub.Functions.StartGuard()
-        else
-            MystrixHub.Functions.StopGuard()
-        end
-    end,
-})
-
-DefenseSection:Slider({
-    Name = "Guard Distance",
-    Min = 2,
-    Max = 20,
-    Suffix = "st",
-    Default = 8,
-    Callback = function(value)
-        getgenv().MystrixGuard.Distance = value
-    end,
-})
-
-DefenseSection:Slider({
-    Name = "Guard Prediction",
-    Min = 0.1,
-    Max = 1,
-    Default = 0.35,
-    Suffix = "s",
-    Decimals = 2,
-    Callback = function(value)
-        getgenv().MystrixGuard.Predict = value
-    end,
-})
-
-DefenseSection:Slider({
-    Name = "Guard Engage Range",
-    Min = 8,
-    Max = 45,
-    Suffix = "st",
-    Default = 22,
-    Callback = function(value)
-        getgenv().MystrixGuard.Engage = value
-    end,
-})
-
-DefenseSection:Toggle({
-    Name = "Ignore Teammates",
-    Default = true,
-    Callback = function(state)
-        getgenv().MystrixGuard.IgnoreTeammates = state
-    end,
-})
-
-local SkillsSection = CombatTab:Section({
-    Name = "Tricks",
-    Icon = "lucide:wand-sparkles",
-    Side = 1,
-})
-
-SkillsSection:Dropdown({
-    Name = "Trick Select",
-    Options = MystrixHub.TrickOptions,
-    Default = { "Auto" },
-    Multi = true,
-    Callback = function(value)
-        MystrixHub.Functions.SetTrickSelection(value)
-    end,
-})
-
-SkillsSection:Toggle({
-    Name = "Auto Tricks",
-    Default = false,
-    Callback = function(state)
-        local AT = getgenv().MystrixAutoTricks
-        if state then
-            if not MystrixHub.Functions.InstallSilentAim() then
-                AT.Enabled = false
-                return
-            end
-            pcall(MystrixHub.Functions.InstallMaxPower)
-            if not MystrixHub.Functions.StartAutoTricks() then
-                AT.Enabled = false
-                return
-            end
-            AT.Enabled = true
-        else
-            AT.Enabled = false
-            MystrixHub.Functions.StopAutoTricks()
-        end
-    end,
-})
-
-SkillsSection:Slider({
-    Name = "Tricks Range",
-    Min = 20,
-    Max = 120,
-    Default = 70,
-    Suffix = "st",
-    Callback = function(value)
-        getgenv().MystrixAutoTricks.Range = value
-    end,
-})
-
-SkillsSection:Slider({
-    Name = "Defender Distance",
-    Min = 6,
-    Max = 30,
-    Suffix = "st",
-    Default = 14,
-    Callback = function(value)
-        getgenv().MystrixAutoTricks.Defender = value
-    end,
-})
-
-local DribbleSection = CombatTab:Section({
-    Name = "Dribble",
-    Icon = "lucide:footprints",
-    Side = 1,
-})
-
-DribbleSection:Toggle({
-    Name = "Auto Dribble",
-    Default = false,
-    Callback = function(state)
-        local AD = getgenv().MystrixAutoDribble
-        if state then
-            if not MystrixHub.Functions.SkillModule() then
-                AD.Enabled = false
-                return
-            end
-            AD.Enabled = true
-            MystrixHub.Functions.StartAutoDribble()
-        else
-            AD.Enabled = false
-            MystrixHub.Functions.StopAutoDribble()
-        end
-    end,
-})
-
-DribbleSection:Slider({
-    Name = "Dribble Range",
-    Min = 6,
-    Max = 20,
-    Suffix = "st",
-    Default = 12,
-    Callback = function(value)
-        getgenv().MystrixAutoDribble.Range = value
-    end,
-})
-
-DribbleSection:Toggle({
-    Name = "Dribble Evade",
-    Default = true,
-    Callback = function(state)
-        getgenv().MystrixAutoDribble.Evade = state
-    end,
-})
-
-DribbleSection:Slider({
-    Name = "Evade Strength",
-    Min = 30,
-    Max = 100,
-    Suffix = "%",
-    Default = 80,
-    Callback = function(value)
-        getgenv().MystrixAutoDribble.EvadeStrength = value / 100
-    end,
-})
-
-local TargetSection = CombatTab:Section({
-    Name = "Pass Targeting",
-    Icon = "lucide:locate-fixed",
-    Side = 2,
-})
-
-TargetSection:Toggle({
-    Name = "Pass Targeting",
-    Default = false,
-    Callback = function(state)
-        if state and not MystrixHub.Functions.InstallSilentAim() then
-            MystrixHub.Functions.SetTargeting(false)
-            return
-        end
-        MystrixHub.Functions.SetTargeting(state)
-    end,
-})
-
-TargetSection:Toggle({
-    Name = "Cycle Target",
-    Keybind = Enum.KeyCode.T,
-    Default = false,
-    Callback = function()
-        MystrixHub.Functions.CycleTarget()
-    end,
-})
-
 local HitboxSection = BallTab:Section({
     Name = "Tackle Hitbox",
     Icon = "lucide:scan",
-    Side = 1,
+    Side = 2,
 })
 
 HitboxSection:Toggle({
     Name = "Hitbox Expander",
+    Description = "Enlarges tackle contact range.",
     Default = false,
     Callback = function(state)
         local HB = getgenv().MystrixHitbox
@@ -6666,6 +6560,7 @@ HitboxSection:Toggle({
 
 HitboxSection:Slider({
     Name = "Hitbox Size",
+    Description = "Size of the tackle hitbox bonus.",
     Min = 0.2,
     Max = 3,
     Suffix = "st",
@@ -6674,6 +6569,137 @@ HitboxSection:Slider({
     Callback = function(value)
         getgenv().MystrixHitbox.Size = value
         MystrixHub.Functions.ApplyTackleHitbox()
+    end,
+})
+
+local SprintSection = PlayerTab:Section({
+    Name = "Sprint",
+    Icon = "lucide:footprints",
+    Side = 1,
+})
+
+SprintSection:Toggle({
+    Name = "Infinite Sprint",
+    Description = "Keeps you at full sprint speed.",
+    Keybind = Enum.KeyCode.N,
+    Default = false,
+    Callback = function(state)
+        getgenv().MystrixSprint.Infinite = state
+        MystrixHub.Functions.RefreshRunSpeed()
+    end,
+})
+
+SprintSection:Toggle({
+    Name = "Auto Sprint",
+    Description = "Sprints whenever you move.",
+    Default = false,
+    Callback = function(state)
+        getgenv().MystrixSprint.Auto = state
+        if state then
+            MystrixHub.Functions.StartAutoSprint()
+        else
+            MystrixHub.Functions.StopAutoSprint()
+        end
+    end,
+})
+
+SprintSection:Slider({
+    Name = "Sprint Speed",
+    Description = "Sprint speed multiplier.",
+    Min = 100,
+    Max = 160,
+    Default = 100,
+    Suffix = "%",
+    Callback = function(value)
+        getgenv().MystrixSprint.Boost = value / 100
+        MystrixHub.Functions.RefreshRunSpeed()
+    end,
+})
+
+local PokeSection = PlayerTab:Section({
+    Name = "Poke",
+    Icon = "lucide:hand",
+    Side = 1,
+})
+
+PokeSection:Toggle({
+    Name = "Auto Poke",
+    Description = "Pokes the ball off nearby carriers.",
+    Default = false,
+    Callback = function(state)
+        local AP = getgenv().MystrixAutoPoke
+        AP.Enabled = state
+        if state then
+            MystrixHub.Functions.StartAutoPoke()
+        else
+            MystrixHub.Functions.StopAutoPoke()
+        end
+    end,
+})
+
+PokeSection:Slider({
+    Name = "Poke Range",
+    Description = "Max distance to poke.",
+    Min = 3,
+    Max = 12,
+    Suffix = "st",
+    Default = 6,
+    Decimals = 1,
+    Callback = function(value)
+        getgenv().MystrixAutoPoke.Range = value
+    end,
+})
+
+local RagdollSection = PlayerTab:Section({
+    Name = "Ragdoll",
+    Icon = "lucide:shield",
+    Side = 2,
+})
+
+RagdollSection:Toggle({
+    Name = "Anti-Tackle",
+    Description = "Recovers instantly when tackled.",
+    Default = false,
+    Callback = function(state)
+        if state and not MystrixHub.Functions.InstallAntiRagdoll() then
+            MystrixHub.Functions.SetAntiTackle(false)
+            return
+        end
+        MystrixHub.Functions.SetAntiTackle(state)
+    end,
+})
+
+RagdollSection:Toggle({
+    Name = "Instant Get Up",
+    Description = "Skips the get-up delay after sliding.",
+    Default = false,
+    Callback = function(state)
+        if state and not MystrixHub.Functions.InstallAntiRagdoll() then
+            MystrixHub.Functions.SetInstantGetUp(false)
+            return
+        end
+        MystrixHub.Functions.SetInstantGetUp(state)
+    end,
+})
+
+local CooldownSection = PlayerTab:Section({
+    Name = "Cooldown",
+    Icon = "lucide:timer",
+    Side = 2,
+})
+
+CooldownSection:Toggle({
+    Name = "No Tackle / Poke Cooldown",
+    Description = "Removes slide and poke cooldowns.",
+    Default = false,
+    Callback = function(state)
+        local NC = getgenv().MystrixNoCooldown
+        NC.Enabled = state
+        if state then
+            MystrixHub.Functions.StartNoCooldown()
+        else
+            MystrixHub.Functions.StopNoCooldown()
+        end
     end,
 })
 
