@@ -594,19 +594,37 @@ local function inside(frame, point, margin)
 	return point.X >= p.X - margin and point.X <= p.X + s.X + margin and point.Y >= p.Y - margin and point.Y <= p.Y + s.Y + margin
 end
 
-local function lockScrolling(locked)
-	if not TouchOnly or not Focus then return end
-	for _, tab in Focus.Tabs do
-		for _, column in tab.Columns do
-			column.Scroll.ScrollingEnabled = not locked
-		end
-	end
+local Scrolling = { Presses = {}, BlockUntil = 0, CaughtAt = 0, Slop = 8 }
+
+function Scrolling.PointOf(input)
+	local point = Vec2(input.Position.X, input.Position.Y) + GuiService:GetGuiInset()
+	if ScreenRef then point += ScreenRef.AbsolutePosition end
+	return point
 end
 
-local function beginDrag(onMove, onEnd, onFrame)
-	local last
-	local function job(dt)
-		local point = mousePos()
+local function beginDrag(onMove, onEnd, onFrame, input)
+	local touch = input and input.UserInputType == Enum.UserInputType.Touch and input or nil
+	local last, ended, job
+	local done = false
+	local function where()
+		if touch then return Scrolling.PointOf(touch) end
+		return mousePos()
+	end
+	local function finish()
+		if done then return end
+		done = true
+		ended:Disconnect()
+		Jobs[job] = nil
+		local point = where()
+		if onMove and point ~= last then onMove(point) end
+		if onEnd then onEnd(point) end
+	end
+	job = function(dt)
+		if touch and (touch.UserInputState == Enum.UserInputState.End or touch.UserInputState == Enum.UserInputState.Cancel) then
+			finish()
+			return
+		end
+		local point = where()
 		if not last or point ~= last then
 			last = point
 			if onMove then onMove(point) end
@@ -614,16 +632,11 @@ local function beginDrag(onMove, onEnd, onFrame)
 		if onFrame then onFrame(point, dt) end
 	end
 	Jobs[job] = true
-	lockScrolling(true)
-	local ended
-	ended = UserInputService.InputEnded:Connect(function(input)
-		if isClick(input) then
-			ended:Disconnect()
-			Jobs[job] = nil
-			lockScrolling(false)
-			local point = mousePos()
-			if onMove and point ~= last then onMove(point) end
-			if onEnd then onEnd(point) end
+	ended = UserInputService.InputEnded:Connect(function(other)
+		if touch then
+			if other == touch then finish() end
+		elseif isClick(other) then
+			finish()
 		end
 	end)
 end
@@ -939,6 +952,339 @@ end
 
 local Window, Tab, Section, Column = {}, {}, {}, {}
 Window.__index, Tab.__index, Section.__index, Column.__index = Window, Tab, Section, Column
+function Scrolling.Blocked()
+	return Scrolling.Hold ~= nil or os.clock() < Scrolling.BlockUntil
+end
+
+function Scrolling.Busy()
+	return Scrolling.Fling ~= nil or os.clock() - Scrolling.CaughtAt < 0.1
+end
+
+function Scrolling.Tap(button, callback)
+	button.MouseButton1Click:Connect(function()
+		if not Scrolling.Blocked() then callback() end
+	end)
+end
+
+function Scrolling.GetPress(input)
+	local press = Scrolling.Presses[input]
+	if not press or press.Done then
+		press = { Input = input, Start = Scrolling.PointOf(input) }
+		Scrolling.Presses[input] = press
+	end
+	return press
+end
+
+function Scrolling.Decide(press, point)
+	if press.Axis then return end
+	local delta = point - press.Start
+	if delta.Magnitude < Scrolling.Slop then return end
+	press.Axis = math.abs(delta.X) > math.abs(delta.Y) * 1.2 and "x" or "y"
+end
+
+function Scrolling.Release(input)
+	local press = Scrolling.Presses[input]
+	if not press then return end
+	press.Done = true
+	Scrolling.Presses[input] = nil
+	if Scrolling.Active == press then
+		Scrolling.Active = nil
+		if os.clock() - press.Time < 0.1 and math.abs(press.Velocity) > 80 then
+			Scrolling.Fling = { Item = press.Item, Position = press.Position, Velocity = math.clamp(press.Velocity, -3500, 3500) }
+		end
+	end
+	if Scrolling.Hold == press then
+		Scrolling.Hold = nil
+		Scrolling.BlockUntil = os.clock() + 0.15
+	end
+end
+
+function Scrolling.PressDrag(input, onMove, onBegin)
+	local touch = input.UserInputType == Enum.UserInputType.Touch
+	local origin = touch and Scrolling.PointOf(input) or mousePos()
+	if Focus and Focus:_barAt(origin) then return end
+	local function start(point)
+		if onBegin then onBegin(origin) end
+		onMove(point)
+		beginDrag(onMove, nil, nil, input)
+	end
+	if not touch then
+		start(origin)
+		return
+	end
+	local press = Scrolling.GetPress(input)
+	local caught, began = Scrolling.Busy(), os.clock()
+	local changed, ended
+	local function stop()
+		changed:Disconnect()
+		ended:Disconnect()
+	end
+	changed = UserInputService.InputChanged:Connect(function(other)
+		if other ~= input then return end
+		local point = Scrolling.PointOf(input)
+		Scrolling.Decide(press, point)
+		if not press.Axis then return end
+		stop()
+		if press.Axis == "x" then start(point) end
+	end)
+	ended = UserInputService.InputEnded:Connect(function(other)
+		if other ~= input then return end
+		stop()
+	end)
+end
+
+function Scrolling.Reachable(inst, point)
+	if not inside(inst, point) then return false end
+	local node = inst.Parent
+	while node and node:IsA("GuiObject") do
+		if (node:IsA("ScrollingFrame") or node.ClipsDescendants) and not inside(node, point) then return false end
+		node = node.Parent
+	end
+	return true
+end
+
+function Scrolling.Depth(inst)
+	local depth, node = 0, inst.Parent
+	while node do
+		depth += 1
+		node = node.Parent
+	end
+	return depth
+end
+
+function Scrolling.Limit(item)
+	return math.max(0, item.Scroll.CanvasSize.Y.Offset - item.Scroll.AbsoluteSize.Y / LayerScale)
+end
+
+function Scrolling.Goal(item)
+	local map = Tracks[item.Scroll]
+	local entry = map and map.CanvasPosition
+	return entry and entry.Goal.Y or item.Scroll.CanvasPosition.Y
+end
+
+function Window:_addScroll(scroll, parent, offset, column, fade)
+	if not self.Scrolls then self:_startScrolling() end
+	scroll.ScrollingEnabled = false
+	local bar = new("Frame", {
+		Name = "ScrollBar", Bg = "Outline", BackgroundTransparency = 1, AnchorPoint = Vec2(0.5, 0),
+		Radius = FULL, Size = Offset(3, 0), Visible = false, ZIndex = 8,
+	}, parent)
+	local thumb = new("Frame", { Name = "Thumb", Bg = "Accent", BackgroundTransparency = 1, Radius = FULL, Size = Dim2(1, 0, 0, 28) }, bar)
+	NoFade[bar], NoFade[thumb] = true, true
+	addGradient(thumb)
+	table.insert(self.Scrolls, {
+		Scroll = scroll, Bar = bar, Thumb = thumb, Offset = offset, Column = column, Fade = fade,
+		Alpha = 0, Hot = 0, LastY = 0, Awake = 0,
+	})
+end
+
+function Window:_scrollsAt(point)
+	local found, depths = {}, {}
+	for _, item in self.Scrolls do
+		if isShown(item.Scroll) and not covered(item.Scroll, point) and Scrolling.Reachable(item.Scroll, point) then
+			depths[item] = Scrolling.Depth(item.Scroll)
+			table.insert(found, item)
+		end
+	end
+	table.sort(found, function(a, b) return depths[a] > depths[b] end)
+	return found
+end
+
+function Window:_pickScroll(point, direction)
+	local fallback
+	for _, item in self:_scrollsAt(point) do
+		local limit = Scrolling.Limit(item)
+		if limit > 1 then
+			fallback = fallback or item
+			local current = Scrolling.Goal(item)
+			if (direction > 0 and current < limit - 1) or (direction < 0 and current > 1) then return item end
+		end
+	end
+	return fallback
+end
+
+function Window:_setScroll(item, y)
+	y = math.clamp(y, 0, Scrolling.Limit(item))
+	if item.Column then item.Column.Target = y end
+	snap(item.Scroll, "CanvasPosition", Vec2(0, y))
+	return y
+end
+
+function Window:_barAt(point)
+	if not self.Visible or not self.Scrolls then return nil end
+	local reach = (TouchOnly and 10 or 5) * LayerScale
+	for _, item in self.Scrolls do
+		local bar, thumb = item.Bar, item.Thumb
+		if bar.Visible and isShown(bar) and not covered(item.Scroll, point) and Scrolling.Reachable(bar.Parent, point) then
+			local center = bar.AbsolutePosition.X + bar.AbsoluteSize.X / 2
+			local target = TouchOnly and thumb or bar
+			local top = target.AbsolutePosition.Y
+			if math.abs(point.X - center) <= reach and point.Y >= top and point.Y <= top + target.AbsoluteSize.Y then
+				return item
+			end
+		end
+	end
+	return nil
+end
+
+function Window:_grabBar(item, input, point)
+	local press = {}
+	if input.UserInputType == Enum.UserInputType.Touch then
+		press = Scrolling.GetPress(input)
+		press.Axis = "lock"
+	end
+	Scrolling.Hold, Scrolling.Grabbed = press, item
+	local bar, thumb = item.Bar, item.Thumb
+	local grab = point.Y - thumb.AbsolutePosition.Y
+	if grab < 0 or grab > thumb.AbsoluteSize.Y then grab = thumb.AbsoluteSize.Y / 2 end
+	local function move(at)
+		local span = bar.AbsoluteSize.Y - thumb.AbsoluteSize.Y
+		if span <= 0 then return end
+		self:_setScroll(item, clamp01((at.Y - grab - bar.AbsolutePosition.Y) / span) * Scrolling.Limit(item))
+	end
+	move(point)
+	beginDrag(move, function()
+		Scrolling.Hold, Scrolling.Grabbed = nil, nil
+		Scrolling.BlockUntil = os.clock() + 0.15
+	end, nil, input)
+end
+
+function Window:_touchScroll(input)
+	local press = Scrolling.Presses[input]
+	if not press then return end
+	local point = Scrolling.PointOf(input)
+	Scrolling.Decide(press, point)
+	if press.Axis ~= "y" then return end
+	if not press.Item then
+		if press.Searched or Scrolling.Active then return end
+		press.Searched = true
+		local item = self:_pickScroll(press.Start, point.Y < press.Start.Y and 1 or -1)
+		if not item then return end
+		press.Item, press.LastY, press.Time, press.Velocity = item, point.Y, os.clock(), 0
+		press.Position = item.Scroll.CanvasPosition.Y
+		Scrolling.Active, Scrolling.Hold = press, press
+		return
+	end
+	local now = os.clock()
+	local delta = (press.LastY - point.Y) / LayerScale
+	press.Position = self:_setScroll(press.Item, press.Position + delta)
+	press.Velocity = press.Velocity * 0.35 + (delta / math.max(now - press.Time, 1 / 120)) * 0.65
+	press.LastY, press.Time = point.Y, now
+end
+
+function Window:_wheelScroll(input)
+	local point = mousePos()
+	local dropdown = self.OpenDropdown
+	if dropdown and not inside(dropdown.Panel, point) then dropdown:Toggle(false) end
+	local direction = -math.sign(input.Position.Z)
+	if direction == 0 then return end
+	local item = self:_pickScroll(point, direction)
+	if not item then return end
+	Scrolling.Fling = nil
+	local goal = math.clamp(Scrolling.Goal(item) + direction * 60, 0, Scrolling.Limit(item))
+	if item.Column then
+		item.Column:ScrollTo(goal)
+	else
+		animate(item.Scroll, "CanvasPosition", Vec2(0, goal), "Soft")
+	end
+end
+
+function Window:_paintBar(item, dt, hovered)
+	local scroll, bar, thumb = item.Scroll, item.Bar, item.Thumb
+	local limit = Scrolling.Limit(item)
+	local size = scroll.AbsoluteSize / LayerScale
+	local length = size.Y - 8
+	if limit <= 1 or length < 12 or not isShown(scroll) then
+		bar.Visible = false
+		return
+	end
+	local now, y = os.clock(), scroll.CanvasPosition.Y
+	if math.abs(y - item.LastY) > 0.5 then item.Awake = now end
+	item.LastY = y
+	local hot = Scrolling.Grabbed == item or hovered == item
+	local blend = 1 - math.exp(-14 * dt)
+	item.Hot += ((hot and 1 or 0) - item.Hot) * blend
+local awake = hot or now - item.Awake < 0.6
+item.Alpha += ((awake and 1 or 0) - item.Alpha) * (1 - math.exp(-(awake and 14 or 3) * dt))
+	local fade = item.Fade and item.Fade() or 1
+	if self.Fader.Entries and scroll:IsDescendantOf(self.Holder) then fade *= self.Fader.Alpha end
+	local origin = (scroll.AbsolutePosition - bar.Parent.AbsolutePosition) / LayerScale
+	local thumbH = math.clamp(floor(length * size.Y / (size.Y + limit)), math.min(28, length), floor(length))
+	bar.Position = Offset(round(origin.X + size.X + item.Offset), round(origin.Y + 4))
+	bar.Size = Offset(round(3 + item.Hot * 3), round(length))
+	thumb.Position = Offset(0, round((length - thumbH) * clamp01(y / limit)))
+	thumb.Size = Dim2(1, 0, 0, thumbH)
+	bar.BackgroundTransparency = 1 - 0.45 * item.Hot * fade
+	thumb.BackgroundTransparency = 1 - item.Alpha * fade
+	bar.Visible = true
+end
+
+function Window:_stepScrolling(dt)
+	for input in Scrolling.Presses do
+		local state = input.UserInputState
+		if state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then Scrolling.Release(input) end
+	end
+	local fling = Scrolling.Fling
+	if fling then
+		if not self.Visible or not isShown(fling.Item.Scroll) then
+			Scrolling.Fling = nil
+		else
+			fling.Velocity *= math.exp(-3.8 * dt)
+			local wanted = fling.Position + fling.Velocity * dt
+			fling.Position = self:_setScroll(fling.Item, wanted)
+			if fling.Position ~= wanted or math.abs(fling.Velocity) < 14 then Scrolling.Fling = nil end
+		end
+	end
+	local hovered = not TouchOnly and self:_barAt(mousePos()) or nil
+	for index = #self.Scrolls, 1, -1 do
+		local item = self.Scrolls[index]
+		if item.Scroll.Parent then
+			self:_paintBar(item, dt, hovered)
+		else
+			item.Bar:Destroy()
+			table.remove(self.Scrolls, index)
+		end
+	end
+end
+
+function Window:_startScrolling()
+	self.Scrolls = {}
+	Scrolling.Presses = {}
+	Scrolling.Hold, Scrolling.Active, Scrolling.Fling, Scrolling.Grabbed = nil, nil, nil, nil
+	Scrolling.BlockUntil, Scrolling.CaughtAt = 0, 0
+	table.insert(self.Connections, UserInputService.InputBegan:Connect(function(input)
+		if not self.Visible or not isClick(input) then return end
+		local touch = input.UserInputType == Enum.UserInputType.Touch
+		local point = touch and Scrolling.PointOf(input) or mousePos()
+		local bar = self:_barAt(point)
+		if bar then
+			Scrolling.Fling = nil
+			self:_grabBar(bar, input, point)
+			return
+		end
+		if #self:_scrollsAt(point) == 0 then return end
+		if not touch then
+			Scrolling.Fling = nil
+			return
+		end
+		local press = Scrolling.GetPress(input)
+		if Scrolling.Fling then
+			Scrolling.Fling = nil
+			Scrolling.CaughtAt = os.clock()
+			Scrolling.Hold = press
+		end
+	end))
+	table.insert(self.Connections, UserInputService.InputChanged:Connect(function(input)
+		if not self.Visible then return end
+		if input.UserInputType == Enum.UserInputType.MouseWheel then
+			self:_wheelScroll(input)
+		elseif input.UserInputType == Enum.UserInputType.Touch then
+			self:_touchScroll(input)
+		end
+	end))
+	table.insert(self.Connections, UserInputService.InputEnded:Connect(Scrolling.Release))
+	Jobs[function(dt) self:_stepScrolling(dt) end] = true
+end
 
 local function formatNumber(value, decimals)
 	if decimals and decimals > 0 then return string.format("%." .. decimals .. "f", value) end
@@ -995,7 +1341,7 @@ local function makeEditable(chip, text, read, write, apply, fit)
 	box:GetPropertyChangedSignal("Text"):Connect(function()
 		if editing then apply(math.ceil(box.TextBounds.X)) end
 	end)
-	hit.MouseButton1Click:Connect(function()
+	Scrolling.Tap(hit, function()
 		editing = true
 		refresh(stroke)
 		box.Text = read()
@@ -1134,7 +1480,7 @@ local function attachKeybind(section, item, options)
 			object.Enabled = value == true
 			object.Refresh()
 		end
-		hit.MouseButton1Click:Connect(function() win:OpenKeybindMenu(chip, object) end)
+		Scrolling.Tap(hit, function() win:OpenKeybindMenu(chip, object) end)
 		object.Chip, object.Label = chip, caption
 		table.insert(win.Binds, object)
 		return object
@@ -1160,7 +1506,7 @@ local function attachKeybind(section, item, options)
 		object.Key = key
 		object.Refresh()
 	end
-	button.MouseButton1Click:Connect(function()
+	Scrolling.Tap(button, function()
 		object.Listening = true
 		win.Listening = object
 		object.Refresh()
@@ -1190,7 +1536,7 @@ local function attachColor(section, item, options)
 		if win.Picker.Target == color and not win.Picker.Dragging then win.Picker.Sync() end
 		if not silent then fire(color.Callback, value, color.Alpha) end
 	end
-	swatch.MouseButton1Click:Connect(function() win:OpenPicker(swatch, color) end)
+	Scrolling.Tap(swatch, function() win:OpenPicker(swatch, color) end)
 	table.insert(win.Colors, color)
 	return color
 end
@@ -1274,7 +1620,7 @@ function Section:Toggle(options)
 		hovering = false
 		refresh(text)
 	end)
-	hit.MouseButton1Click:Connect(function() toggle:Set(not toggle.Value) end)
+	Scrolling.Tap(hit, function() toggle:Set(not toggle.Value) end)
 
 	local hotkeyName = options.KeybindName or (name == "Enabled" and self.Name) or name
 	options.KeybindName = hotkeyName
@@ -1402,9 +1748,7 @@ function Section:Slider(options)
 		slider:Set(minimum + (maximum - minimum) * alphaAt(track, point))
 	end
 	hit.InputBegan:Connect(function(input)
-		if not isClick(input) then return end
-		fromMouse(mousePos())
-		beginDrag(fromMouse)
+		if isClick(input) then Scrolling.PressDrag(input, fromMouse) end
 	end)
 
 	table.insert(self.Window.ResizeJobs, function() render(false) end)
@@ -1479,11 +1823,10 @@ function Section:RangeSlider(options)
 	end
 	hit.InputBegan:Connect(function(input)
 		if not isClick(input) then return end
-		local point = mousePos()
-		local value = valueAt(point)
-		active = math.abs(value - range.Value[1]) <= math.abs(value - range.Value[2]) and 1 or 2
-		fromMouse(point)
-		beginDrag(fromMouse)
+		Scrolling.PressDrag(input, fromMouse, function(point)
+			local value = valueAt(point)
+			active = math.abs(value - range.Value[1]) <= math.abs(value - range.Value[2]) and 1 or 2
+		end)
 	end)
 
 	table.insert(self.Window.ResizeJobs, function() render(false) end)
@@ -1538,6 +1881,7 @@ local function buildDropdown(win, parent, options)
 	local emptyText = label(panel, { Fg = "InactiveText", Text = options.Empty or "No options", TextSize = 13, X = 9, RowH = Metrics.ListRowH, Right = 8, TextTransparency = 1 })
 	local emptyY = emptyText.Position.Y.Offset
 	dropdown.Reveal = 0
+	win:_addScroll(list, panel, -4, nil, function() return dropdown.Reveal end)
 
 	local function isSelected(option)
 		if dropdown.Multi then return dropdown.Value[option] == true end
@@ -1632,7 +1976,7 @@ local function buildDropdown(win, parent, options)
 				refresh(row.Button)
 				animate(row, "Hov", 0, "Fast", { Step = step })
 			end)
-			row.Button.MouseButton1Click:Connect(function()
+			Scrolling.Tap(row.Button, function()
 				if dropdown.Multi then
 					dropdown.Value[option] = not dropdown.Value[option] or nil
 					paint(true)
@@ -1754,7 +2098,7 @@ local function buildDropdown(win, parent, options)
 	end
 
 	dropdown.Input, dropdown.Panel = input, panel
-	input.MouseButton1Click:Connect(function()
+	Scrolling.Tap(input, function()
 		if win.DropdownClosedBy == input and os.clock() - win.DropdownClosedAt < 0.25 then return end
 		dropdown:Toggle()
 	end)
@@ -1787,7 +2131,7 @@ function Section:Button(options)
 		setWidth(trackWidth(win) - extra)
 	end
 	table.insert(win.ResizeJobs, function() setWidth(trackWidth(win) - (item.Extra or 0)) end)
-	button.MouseButton1Click:Connect(function() fire(object.Callback) end)
+	Scrolling.Tap(button, function() fire(object.Callback) end)
 
 	if options.Keybind ~= nil or options.Bindable then
 		item.SlotAreaH = Metrics.ButtonH
@@ -1823,10 +2167,22 @@ function Section:Textbox(options)
 		if not silent then fire(object.Callback, text) end
 	end
 	local stroke = frame:FindFirstChildOfClass("UIStroke")
-	local focused = false
+	local focused, rejected = false, false
 	bind(stroke, "Color", function() return focused and Current.Accent or Current.Outline end)
-	box.Focused:Connect(function() focused = true; refresh(stroke) end)
+	box.Focused:Connect(function()
+		if Scrolling.Blocked() then
+			rejected = true
+			task.defer(function() box:ReleaseFocus() end)
+			return
+		end
+		focused = true
+		refresh(stroke)
+	end)
 	box.FocusLost:Connect(function()
+		if rejected then
+			rejected = false
+			return
+		end
 		focused = false
 		refresh(stroke)
 		object:Set(box.Text)
@@ -1843,6 +2199,7 @@ function Section:Listbox(options)
 		ScrollBarThickness = 0, CanvasSize = Offset(0, 0),
 	}, item.Frame)
 	local listbox = { Options = {}, Value = nil, Item = item, Callback = options.Callback }
+	self.Window:_addScroll(frame, item.Frame, -5)
 	local rows = {}
 	local emptyText = label(frame, { Fg = "InactiveText", Text = options.Empty or "Nothing here yet", TextSize = 13, X = 10, Y = 2, RowH = Metrics.ListRowH, Right = 8 })
 
@@ -1879,7 +2236,7 @@ function Section:Listbox(options)
 			})
 			row.TextY = row.Text.Position.Y.Offset
 			hoverable(row.Button, function() animate(row.Button, "BackgroundTransparency", 0, "Fast") end, function() animate(row.Button, "BackgroundTransparency", 1, "Fast") end)
-			row.Button.MouseButton1Click:Connect(function() listbox:Set(option) end)
+			Scrolling.Tap(row.Button, function() listbox:Set(option) end)
 			table.insert(rows, row)
 		end
 		frame.CanvasSize = Offset(0, 4 + #optionsList * Metrics.ListRowH)
@@ -1891,7 +2248,7 @@ function Section:Listbox(options)
 	return listbox
 end
 
-function Section:_beginDrag(immediate)
+function Section:_beginDrag(immediate, input)
 	if self.Dropping then return end
 	local win, start = self.Window, mousePos()
 	local grab = start - self.Root.AbsolutePosition
@@ -1989,7 +2346,7 @@ function Section:_beginDrag(immediate)
 				self.Root.Position = Offset(0, self.Y)
 			end,
 		})
-	end, frame)
+	end, frame, input)
 end
 
 function Tab:Section(options)
@@ -2062,19 +2419,22 @@ function Tab:Section(options)
 		trackTouch(input)
 		local kind = input.UserInputType
 		if kind == Enum.UserInputType.MouseButton1 then
-			section:_beginDrag()
+			section:_beginDrag(false, input)
 		elseif kind == Enum.UserInputType.Touch then
-			local origin = input.Position
+			local press = Scrolling.GetPress(input)
+			local caught = Scrolling.Busy()
 			task.delay(0.35, function()
+				if caught or press.Done or press.Axis then return end
 				local state = input.UserInputState
 				if state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then return end
-				if (input.Position - origin).Magnitude > 10 then return end
 				if section.Dragging or section.Dropping then return end
-				section:_beginDrag(true)
+				press.Axis = "lock"
+				Scrolling.Hold = press
+				section:_beginDrag(true, input)
 			end)
 		end
 	end)
-	fold.MouseButton1Click:Connect(function() section:SetCollapsed(not section.Collapsed, true) end)
+	Scrolling.Tap(fold, function() section:SetCollapsed(not section.Collapsed, true) end)
 	section:Layout(false)
 	if options.Collapsed then section:SetCollapsed(true, false) end
 	return section
@@ -2213,6 +2573,7 @@ function Window:Tab(options)
 			ScrollingEnabled = not UserInputService.MouseEnabled, ClipsDescendants = true,
 		}, tab.Page)
 		local column = setmetatable({ Scroll = scroll, Sections = {}, Target = 0, ContentH = 0, Tab = tab, ShowTop = false, ShowBottom = false }, Column)
+		self:_addScroll(scroll, tab.Page, 5, column)
 		local function edge(position, rotation)
 			local frame = new("Frame", { Bg = "Tab", BackgroundTransparency = 1, Position = position, Size = Offset(self.ColumnW, 14), ZIndex = 4 }, tab.Page)
 			new("UIGradient", { Rotation = rotation, Transparency = NumberSequence.new(1, 0) }, frame)
@@ -2586,7 +2947,7 @@ function Window:_buildResize()
 		end)
 		table.insert(self.ResizeHandles, button)
 	end
-	handle("ResizeRight", Dim2(1, 3, 0, 12), Dim2(0, edge, 1, -(corner + 12)), Vec2(1, 0), 1, 0)
+	if not TouchOnly then handle("ResizeRight", Dim2(1, 3, 0, 12), Dim2(0, edge, 1, -(corner + 12)), Vec2(1, 0), 1, 0) end
 	handle("ResizeBottom", Dim2(0, 12, 1, 3), Dim2(1, -(corner + 12), 0, edge), Vec2(0, 1), 0, 1)
 	handle("ResizeCorner", Dim2(1, 3, 1, 3), Offset(corner, corner), Vec2(1, 1), 1, 1)
 end
@@ -2608,23 +2969,25 @@ end
 
 function Window:_overControl(point)
 	if self.Search.Open then return true end
-    if inside(self.Controls, point) then return true end
+	if self:_barAt(point) then return true end
+	if inside(self.Controls, point) then return true end
 	if self.OpenDropdown and inside(self.OpenDropdown.Panel, point) then return true end
 	if self.ActivePopup and inside(self.ActivePopup.Frame, point) then return true end
 	if inside(self.SearchButton, point) then return true end
 	for _, handle in self.ResizeHandles do
 		if inside(handle, point) then return true end
 	end
-    for _, entry in self.SidebarItems do
-	if entry.Kind == "Category" then
-		if inside(entry.Root, point) then return true end
-	elseif not entry.Hidden and inside(entry.Button, point) then
-		return true
+	for _, entry in self.SidebarItems do
+		if entry.Kind == "Category" then
+			if inside(entry.Root, point) then return true end
+		elseif not entry.Hidden and inside(entry.Button, point) then
+			return true
+		end
 	end
-    end
 	if self.CurrentTab then
 		for _, column in self.CurrentTab.Columns do
 			if inside(column.Scroll, point) then
+				if TouchOnly then return true end
 				for _, section in column.Sections do
 					if inside(section.Root, point) then return true end
 				end
@@ -2867,7 +3230,10 @@ function Window:_buildSearch()
 	local results = new("ScrollingFrame", {
 		Position = Offset(pad * 2, 88), Size = Offset(width - pad * 4 + 6, height - 88 - pad), CanvasSize = Offset(0, 0),
 	}, modal)
-
+	self:_addScroll(results, modal, -3, nil, function()
+		local state = self.Search
+		return state and state.Fader.Entries and state.Fader.Alpha or 1
+	end)
 	local noResults = centeredLabel(modal, width, { Fg = "InactiveText", Text = "No results", Y = 170 })
 	noResults.Visible = false
 	local search = { Overlay = overlay, Modal = modal, Fader = newFader(overlay), Open = false, Rows = {}, Dirty = false, Box = box, Order = {} }
@@ -2905,7 +3271,7 @@ function Window:_buildSearch()
 		row.Name = label(frame, { Text = name, TextSize = 13, X = 14, Y = 5, RowH = 18, TextTransparency = 1, Right = 10, Truncate = Enum.TextTruncate.AtEnd })
 		row.Sub = label(frame, { Fg = "InactiveText", Text = sub, TextSize = 11, X = 14, Y = 22, RowH = 16, TextTransparency = 1, Right = 10, Truncate = Enum.TextTruncate.AtEnd })
 		hoverable(frame, function() animate(frame, "BackgroundTransparency", 0.4, "Fast") end, function() animate(frame, "BackgroundTransparency", 1, "Fast") end)
-		frame.MouseButton1Click:Connect(function() goTo(entry) end)
+		Scrolling.Tap(frame, function() goTo(entry) end)
 		return row
 	end
 
@@ -4005,21 +4371,6 @@ function Blossom.new(options)
 		for _, object in win.Binds do
 			if object.Key and (object.Key == input.KeyCode or object.Key == input.UserInputType) and object.OnRelease then
 				object.OnRelease()
-			end
-		end
-	end))
-
-	table.insert(win.Connections, UserInputService.InputChanged:Connect(function(input)
-		if input.UserInputType ~= Enum.UserInputType.MouseWheel or not win.Visible or win.Search.Open or not win.CurrentTab then return end
-		local point = mousePos()
-		local dropdown = win.OpenDropdown
-		if dropdown then
-			if inside(dropdown.Panel, point) then return end
-			dropdown:Toggle(false)
-		end
-		for _, column in win.CurrentTab.Columns do
-			if inside(column.Scroll, point) then
-				column:ScrollTo(column.Target - input.Position.Z * 60)
 			end
 		end
 	end))
