@@ -3772,254 +3772,6 @@ local function writeAutoload(folder, name)
 	end
 end
 
-function Window:BuildHome(tab, changelog)
-	local player = Players.LocalPlayer
-
-	local profile = tab:Section({ Name = "Player Info", Icon = "user", Side = 1 })
-	local details = tab:Section({ Name = "Game Details", Icon = "gamepad-2", Side = 2 })
-	local updates = tab:Section({ Name = "Changelog", Icon = "history", Side = 1 })
-
-	local function identity(section, image, title, subtitle, radius)
-		local row = section:_item(48, "Label", nil, false)
-		new("ImageLabel", {
-			Image = image,
-			Bg = "Element",
-			Border = "Outline",
-			Radius = radius,
-			ScaleType = Enum.ScaleType.Crop,
-			Position = Offset(1, 2),
-			Size = Offset(44, 44),
-		}, row.Frame)
-
-		local heading = label(row.Frame, {
-			Text = title,
-			X = 55,
-			Y = subtitle and 4 or 0,
-			RowH = subtitle and 21 or 48,
-			TextSize = 14,
-			Weight = Enum.FontWeight.SemiBold,
-			Truncate = Enum.TextTruncate.AtEnd,
-		})
-
-		if subtitle then
-			label(row.Frame, {
-				Text = subtitle,
-				X = 55,
-				Y = 25,
-				RowH = 17,
-				TextSize = 12,
-				Fg = "InactiveText",
-				Truncate = Enum.TextTruncate.AtEnd,
-			})
-		end
-
-		return heading, row
-	end
-
-	identity(
-		profile,
-		("rbxthumb://type=AvatarHeadShot&id=%d&w=150&h=150"):format(player.UserId),
-		player.DisplayName,
-		"@" .. player.Name,
-		FULL
-	)
-
-	local gameTitle, gameRow = identity(
-		details,
-		("rbxthumb://type=GameIcon&id=%d&w=150&h=150"):format(game.GameId),
-		"Loading name…",
-		nil,
-		Metrics.CardRadius
-	)
-
-	task.spawn(function()
-		local ok, name = pcall(function()
-			local url = ("https://games.roblox.com/v1/games?universeIds=%d"):format(game.GameId)
-			local result = HttpService:JSONDecode(game:HttpGet(url))
-			return result.data[1].name
-		end)
-
-		if not ok or type(name) ~= "string" or name == "" then
-			ok, name = pcall(function()
-				local market = game:GetService("MarketplaceService")
-				return market:GetProductInfoAsync(game.PlaceId, Enum.InfoType.Asset).Name
-			end)
-		end
-
-		if gameTitle.Parent then
-			local title = ok and type(name) == "string" and name ~= "" and name or "Name unavailable"
-			setText(gameTitle, title)
-			self:_describe(gameRow, title)
-		end
-	end)
-
-	self:_addHomeServerControls(details)
-
-	local function addNote(text)
-		local item = updates:_item(18, "Label", nil, false)
-
-		new("Frame", {
-			Bg = "Accent",
-			Position = Offset(1, 6),
-			Size = Offset(4, 4),
-			Radius = FULL,
-		}, item.Frame)
-
-		local note = new("TextLabel", {
-			Text = text,
-			Fg = "Text",
-			TextSize = 12,
-			TextWrapped = true,
-			AutomaticSize = Enum.AutomaticSize.Y,
-			Position = Offset(13, 0),
-			Size = Dim2(1, -14, 0, 0),
-		}, item.Frame)
-
-		local function fit()
-			local height = math.max(18, note.AbsoluteSize.Y)
-			if item.Height == height then return end
-			item.Height = height
-			item.Frame.Size = Dim2(1, 0, 0, height)
-			updates:Layout(false)
-		end
-
-		note:GetPropertyChangedSignal("AbsoluteSize"):Connect(fit)
-		fit()
-	end
-
-	if changelog and #changelog > 0 then
-		for _, entry in ipairs(changelog) do
-			addNote(entry)
-		end
-	else
-		addNote("Added player profiles and server controls to Home.")
-	end
-end
-
-function Window:_addHomeServerControls(section)
-	local teleport = game:GetService("TeleportService")
-	local player = Players.LocalPlayer
-	local pending
-
-	local function fail(message)
-		pending = nil
-		if self.Screen.Parent then
-			self:Notify(message, "Warning")
-		end
-	end
-
-	local function findServer()
-		local cursor
-		repeat
-			local url = ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100"):format(game.PlaceId)
-			if cursor then
-				url ..= "&cursor=" .. HttpService:UrlEncode(cursor)
-			end
-
-			local page = HttpService:JSONDecode(game:HttpGet(url))
-			if not self.Screen.Parent then return nil end
-
-			for _, server in ipairs(page.data) do
-				if server.id ~= game.JobId and server.playing < server.maxPlayers then
-					return server.id
-				end
-			end
-
-			cursor = page.nextPageCursor
-		until not cursor or cursor == ""
-
-		return nil
-	end
-
-	local function join(jobId, findAnother)
-		if pending then
-			self:Notify("A server request is already in progress.", "Warning")
-			return
-		end
-
-		if RunService:IsStudio() then
-			self:Notify("Open the published game to join a server.", "Warning")
-			return
-		end
-
-		local request = {}
-		pending = request
-
-		if findAnother then
-			self:Notify("Looking for another public server.")
-			local ok, result = pcall(findServer)
-			if not self.Screen.Parent then return end
-			if not ok then
-				fail("Couldn’t load the public server list.")
-				return
-			end
-			if not result then
-				fail("No other public server has an open slot.")
-				return
-			end
-			jobId = result
-		end
-
-		local ok = pcall(function()
-			teleport:TeleportToPlaceInstance(game.PlaceId, jobId, player)
-		end)
-
-		if not ok then
-			fail("Couldn’t start the teleport. Try again.")
-			return
-		end
-
-		task.delay(20, function()
-			if pending == request then pending = nil end
-		end)
-	end
-
-	table.insert(self.Connections, teleport.TeleportInitFailed:Connect(function(who, result, _, placeId)
-		if pending and who == player and placeId == game.PlaceId then
-			fail("Teleport failed (" .. result.Name .. ").")
-		end
-	end))
-
-	section:Button({
-		Name = "Join another server",
-		NoSave = true,
-		Callback = function()
-			join(nil, true)
-		end,
-	})
-
-	section:Button({
-		Name = "Rejoin this server",
-		NoSave = true,
-		Callback = function()
-			join(game.JobId, false)
-		end,
-	})
-
-	section:Divider()
-
-	local input = section:Textbox({
-		Name = "Job ID",
-		Placeholder = "Paste a server Job ID",
-		NoSave = true,
-	})
-
-	section:Button({
-		Name = "Join by Job ID",
-		NoSave = true,
-		Callback = function()
-			local id = input.Instance.Text:match("^%s*(.-)%s*$")
-			local a, b, c, d, e = id:match("^(%x+)%-(%x+)%-(%x+)%-(%x+)%-(%x+)$")
-			if not a or #a ~= 8 or #b ~= 4 or #c ~= 4 or #d ~= 4 or #e ~= 12 then
-				failMessage = nil
-				self:Notify("Enter a valid server Job ID.", "Warning")
-				return
-			end
-			join(id, false)
-		end,
-	})
-end
-
 function Window:BuildSettings(tab)
 	local selected
 	local saved = readAutoload(self.ConfigFolder)
@@ -4123,6 +3875,247 @@ function Window:BuildSettings(tab)
 			if self:LoadConfig(saved) then self:Notify(('Autoloaded "%s".'):format(saved)) end
 		end)
 	end
+end
+
+function Section:Profile(options)
+	local item = self:_item(60, "Profile", options.Name, false)
+	local card = new("Frame", {
+		Bg = "Element", Position = Offset(1, 1), Size = Dim2(1, -2, 1, -2), Radius = Metrics.Radius, Border = "Outline",
+	}, item.Frame)
+	addGradient(card)
+	local ring = new("Frame", {
+		Bg = "Tab", Position = Offset(8, 7), Size = Offset(44, 44), Radius = FULL, Border = "Accent",
+	}, card)
+	new("ImageLabel", {
+		Position = Offset(2, 2), Size = Dim2(1, -4, 1, -4), Radius = FULL,
+		Image = ("rbxthumb://type=AvatarHeadShot&id=%d&w=150&h=150"):format(options.UserId),
+	}, ring)
+	label(card, {
+		Text = options.DisplayName, TextSize = 13, Weight = Enum.FontWeight.Bold,
+		X = 62, Y = 12, RowH = 18, Right = 8, Truncate = Enum.TextTruncate.AtEnd,
+	})
+	label(card, {
+		Fg = "InactiveText", Text = "@" .. options.Username, TextSize = 11,
+		X = 62, Y = 30, RowH = 16, Right = 8, Truncate = Enum.TextTruncate.AtEnd,
+	})
+	return { Item = item }
+end
+
+function Section:GameCard(options)
+	local win = self.Window
+	local item = self:_item(60, "Game", nil, false)
+	local card = new("Frame", {
+		Bg = "Element", Position = Offset(1, 1), Size = Dim2(1, -2, 1, -2), Radius = Metrics.Radius, Border = "Outline",
+	}, item.Frame)
+	addGradient(card)
+	local frame = new("Frame", {
+		Bg = "Tab", Position = Offset(8, 7), Size = Offset(44, 44), Radius = Metrics.CardRadius, Border = "Outline",
+	}, card)
+	local icon = new("ImageLabel", {
+		Position = Offset(1, 1), Size = Dim2(1, -2, 1, -2), Radius = Metrics.CardRadius,
+	}, frame)
+	local name = label(card, {
+		Text = "Loading...", TextSize = 13, Weight = Enum.FontWeight.Bold,
+		X = 62, Y = 12, RowH = 18, Right = 8, Truncate = Enum.TextTruncate.AtEnd,
+	})
+	local players = label(card, {
+		Fg = "InactiveText", Text = "", TextSize = 11,
+		X = 62, Y = 30, RowH = 16, Right = 8, Truncate = Enum.TextTruncate.AtEnd,
+	})
+	local function count()
+		setText(players, ("%d / %d players"):format(#Players:GetPlayers(), Players.MaxPlayers))
+	end
+	count()
+	table.insert(win.Connections, Players.PlayerAdded:Connect(count))
+	table.insert(win.Connections, Players.PlayerRemoving:Connect(function() task.defer(count) end))
+	task.spawn(function()
+		local ok, info = pcall(function()
+			return game:GetService("MarketplaceService"):GetProductInfo(options.PlaceId)
+		end)
+		if not name.Parent then return end
+		local assetId = ok and info and info.IconImageAssetId or 0
+		setText(name, ok and info and info.Name or game.Name)
+		icon.Image = assetId ~= 0 and ("rbxassetid://" .. assetId)
+			or ("rbxthumb://type=GameIcon&id=%d&w=150&h=150"):format(options.GameId)
+	end)
+	return { Item = item }
+end
+
+function Section:Changelog(options)
+	local colors = {
+		Added = function() return RGB(112, 205, 132) end,
+		Improved = function() return Current.Accent end,
+		Fixed = function() return RGB(240, 180, 70) end,
+		Removed = function() return RGB(235, 95, 95) end,
+	}
+	for _, entry in options.Entries or {} do
+		local item = self:_item(60, "Changelog", entry.Version, false)
+		local card = new("Frame", {
+			Bg = "Element", Position = Offset(1, 1), Size = Dim2(1, -2, 1, -2), Radius = Metrics.Radius, Border = "Outline",
+		}, item.Frame)
+		addGradient(card)
+		label(card, {
+			Fg = "Accent", Text = entry.Version, TextSize = 12, Weight = Enum.FontWeight.Bold,
+			X = 10, Y = 4, RowH = 20, Right = 90, Truncate = Enum.TextTruncate.AtEnd,
+		})
+		local date = label(card, {
+			Fg = "InactiveText", Text = entry.Date or "", TextSize = 11, X = 0, Y = 4, RowH = 20, Right = 10,
+		})
+		date.TextXAlignment = Enum.TextXAlignment.Right
+		new("Frame", { Bg = "Outline", Position = Offset(10, 28), Size = Dim2(1, -20, 0, 1) }, card)
+		local rows = {}
+		for _, change in entry.Changes or {} do
+			local frame = new("Frame", { Size = Dim2(1, -20, 0, 13) }, card)
+			new("Frame", {
+				Bg = colors[change[1]] or colors.Improved, Position = Offset(0, 4), Size = Offset(5, 5), Radius = FULL,
+			}, frame)
+			local text = new("TextLabel", {
+				Fg = function() return Current.Text:Lerp(Current.InactiveText, 0.2) end,
+				Text = change[2], TextSize = 11, TextWrapped = true,
+				Position = Offset(13, 0), Size = Dim2(1, -13, 0, 13),
+			}, frame)
+			table.insert(rows, { Frame = frame, Text = text })
+		end
+		local function fit()
+			local y = 38
+			for _, row in rows do
+				local height = math.max(13, math.ceil(row.Text.TextBounds.Y))
+				row.Text.Size = Dim2(1, -13, 0, height)
+				row.Frame.Size = Dim2(1, -20, 0, height)
+				row.Frame.Position = Offset(10, y)
+				y += height + 6
+			end
+			local total = (#rows > 0 and y - 6 or 38) + 10
+			if total == item.Height then return end
+			item.Height = total
+			item.Frame.Size = Dim2(1, 0, 0, total)
+			self:Layout(false)
+		end
+		for _, row in rows do
+			row.Text:GetPropertyChangedSignal("TextBounds"):Connect(fit)
+		end
+		fit()
+	end
+end
+
+function Window:BuildHome(tab, options)
+	options = options or {}
+	local player = Players.LocalPlayer
+	local TeleportService = game:GetService("TeleportService")
+	local busy = false
+
+	table.insert(self.Connections, TeleportService.TeleportInitFailed:Connect(function(_, _, message)
+		busy = false
+		self:Notify(message ~= "" and message or "Teleport failed.", "Error")
+	end))
+
+	local function go(action, message)
+		if busy then
+			self:Notify("A teleport is already in progress.", "Warning")
+			return
+		end
+		busy = true
+		self:Notify(message, "Info")
+		task.spawn(function()
+			local ok, result, reason = pcall(action)
+			if not ok or result == false then
+				busy = false
+				self:Notify(ok and reason or "Teleport failed.", ok and "Warning" or "Error")
+			end
+		end)
+		task.delay(10, function() busy = false end)
+	end
+
+	local function hop()
+		local ok, data = pcall(function()
+			return HttpService:JSONDecode(game:HttpGet(
+				("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(game.PlaceId)
+			))
+		end)
+		if not ok or type(data) ~= "table" or type(data.data) ~= "table" then
+			return false, "Could not fetch the server list."
+		end
+		local pool = {}
+		for _, server in data.data do
+			if server.id ~= game.JobId and server.playing < server.maxPlayers - 1 then
+				table.insert(pool, server.id)
+			end
+		end
+		if #pool == 0 then return false, "No open servers found." end
+		TeleportService:TeleportToPlaceInstance(game.PlaceId, pool[math.random(#pool)], player)
+	end
+
+	local function rejoin()
+		if #Players:GetPlayers() <= 1 then
+			player:Kick("\nRejoining...")
+			task.wait()
+			TeleportService:Teleport(game.PlaceId, player)
+		else
+			TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player)
+		end
+	end
+
+	local profile = tab:Section({ Name = "Player Info", Icon = "user", Side = 1 })
+	profile:Profile({ UserId = player.UserId, DisplayName = player.DisplayName, Username = player.Name })
+
+	local changelog = tab:Section({ Name = "Changelog", Icon = "scroll-text", Side = 1 })
+	changelog:Changelog({ Entries = options.Changelog or {
+		{
+			Version = "v1.1.0", Date = "Nov 27, 2026",
+			Changes = {
+				{ "Added", "Home tab with player info, game details and server tools." },
+				{ "Added", "Join any server by pasting its Job ID." },
+				{ "Improved", "Config list now refreshes after every save." },
+				{ "Fixed", "Dropdown panels no longer overlap the window edge." },
+			},
+		},
+		{
+			Version = "v1.0.0", Date = "Nov 12, 2026",
+			Changes = {
+				{ "Added", "Initial release with theming, configs and hotkeys." },
+				{ "Removed", "Legacy settings menu." },
+			},
+		},
+	} })
+
+	local gameSection = tab:Section({ Name = "Game Details", Icon = "gamepad-2", Side = 2 })
+	gameSection:GameCard({ PlaceId = game.PlaceId, GameId = game.GameId })
+	gameSection:Divider()
+	gameSection:Button({
+		Name = "Server Hop", Description = "Teleports you to a random public server that has open slots.",
+		Callback = function() go(hop, "Searching for a server...") end,
+	})
+	gameSection:Button({
+		Name = "Rejoin", Description = "Rejoins the current server, or a fresh one if you are alone.",
+		Callback = function() go(rejoin, "Rejoining...") end,
+	})
+	gameSection:Button({
+		Name = "Copy Job ID", Description = "Copies this server's Job ID to your clipboard.",
+		Callback = function()
+			if copyToClipboard(game.JobId) then
+				self:Notify("Job ID copied to clipboard.")
+			else
+				self:Notify("Clipboard unavailable on this executor.", "Warning")
+			end
+		end,
+	})
+	gameSection:Divider()
+	local jobBox = gameSection:Textbox({ Placeholder = "Paste a Job ID", NoSave = true })
+	gameSection:Button({
+		Name = "Join Job ID", Description = "Joins the server matching the Job ID typed above.",
+		Callback = function()
+			local id = string.gsub(jobBox.Instance.Text, "%s", "")
+			if id == "" then
+				self:Notify("Enter a Job ID first.", "Warning")
+			elseif id == game.JobId then
+				self:Notify("You are already in this server.", "Warning")
+			else
+				go(function()
+					TeleportService:TeleportToPlaceInstance(game.PlaceId, id, player)
+				end, "Joining server...")
+			end
+		end,
+	})
 end
 
 function Window:_buildWatermark(options)
@@ -4758,8 +4751,7 @@ function Blossom.new(options)
 	end
 	Jobs[perFrame] = true
 	table.insert(win.Jobs, perFrame)
-	win.HomeTab = win:Tab({ Name = "Home", Icon = "house" })
-	win:BuildHome(win.HomeTab, options.Changelog)
+
 	holder.Visible, win.Visible = false, false
 	win.Watermark.Visible, win.Hotkeys.Visible = false, false
 	if options.Loading == false then
