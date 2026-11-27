@@ -2475,7 +2475,7 @@ end
 
 local function sidebarStep(entry, before)
 	if entry.Kind == "Category" then return before and Metrics.TabToCategory or 0 end
-	if not before then return Metrics.CategoryToTab end
+	if not before then return entry.Category and Metrics.CategoryToTab or 8 end
 	return before.Kind == "Category" and Metrics.CategoryToTab or Metrics.TabPitch
 end
 
