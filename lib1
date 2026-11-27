@@ -18,7 +18,7 @@ local Metrics = {
 	WindowW = 586, WindowH = 466, MinWindowW = 520, MinWindowH = 380, SidebarW = 141, ContentX = 142, ColumnW = 207,
 	TabW = 121, TabH = 28, TabPitch = 32, CategoryToTab = 25, TabToCategory = 25, FirstCategory = 56, SearchH = 28,
 	Row = 16, TopBar = 32, LineY = 24, HeaderH = 28, HeaderDescH = 42,
-	DividerH = 5, SliderH = 33, DropdownH = 47, InputH = 26, ButtonH = 28, ListRowH = 24,
+	DividerH = 9, SliderH = 33, DropdownH = 47, InputH = 26, ButtonH = 28, ListRowH = 24,
 	ToggleW = 28, ToggleH = 16, ToggleKnob = 10, Knob = 11, PickerKnob = 8, TrackH = 9, TrackY = 24, TrackInset = 5,
 	ChipH = 16, ValueChipH = 17, Swatch = 14, ChipGap = 2,
     SidebarShut = 48, SidebarMin = 120, SidebarMax = 200,
@@ -442,7 +442,10 @@ local function new(class, props, parent)
 	end
 	if TEXT_CLASSES[class] then
 		if class ~= "TextButton" then Cased[inst] = {} end
-		if class == "TextBox" then inst.Text = "" end
+		if class == "TextBox" then
+			inst.Text = ""
+			inst.ClipsDescendants = true
+		end
 		inst.FontFace = fontOf(nil)
 		inst.TextSize = 13
 		inst.TextXAlignment = Enum.TextXAlignment.Left
@@ -1659,16 +1662,27 @@ end
 
 function Section:Divider()
 	local item = self:_item(Metrics.DividerH, "Divider", nil, false)
+	local y = floor(Metrics.DividerH / 2)
+	local fade = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.15, 0.4),
+		NumberSequenceKeypoint.new(0.5, 0),
+		NumberSequenceKeypoint.new(0.85, 0.4),
+		NumberSequenceKeypoint.new(1, 1),
+	})
 	local line = new("Frame", {
-		Bg = "Outline", Position = Offset(0, floor(Metrics.DividerH / 2)), Size = Dim2(1, 0, 0, 1),
+		Bg = function() return Current.Outline:Lerp(Current.InactiveText, 0.45) end,
+		Position = Offset(0, y), Size = Dim2(1, 0, 0, 1),
 	}, item.Frame)
-	new("UIGradient", {
-		Transparency = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 1),
-			NumberSequenceKeypoint.new(0.5, 0),
-			NumberSequenceKeypoint.new(1, 1),
-		}),
-	}, line)
+	new("UIGradient", { Transparency = fade }, line)
+	local shine = new("Frame", {
+		Bg = "Text", BackgroundTransparency = 0.94, Position = Offset(0, y + 1), Size = Dim2(1, 0, 0, 1),
+	}, item.Frame)
+	new("UIGradient", { Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.5, 0),
+		NumberSequenceKeypoint.new(1, 1),
+	}) }, shine)
 	return item
 end
 
