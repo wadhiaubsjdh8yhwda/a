@@ -2201,6 +2201,60 @@ function Section:Textbox(options)
 	return object
 end
 
+function Section:InputButton(options)
+	local win = self.Window
+	local item = self:_item(Metrics.InputH, "Textbox", options.Name or options.Placeholder)
+	local buttonW = options.ButtonWidth or 50
+	local frame = new("Frame", {
+		Bg = "Element", Position = Offset(1, 1), Size = Dim2(1, -(buttonW + Metrics.Gap), 0, Metrics.InputH - 2),
+		Radius = Metrics.Radius, Border = "Outline",
+	}, item.Frame)
+	addGradient(frame)
+	local box = new("TextBox", {
+		Fg = "Text", PlaceholderText = options.Placeholder or "", Text = options.Default or "", TextSize = 13,
+		Position = Offset(7, capOffset(Metrics.InputH - 2, 13)), Size = Dim2(1, -14, 0, 18), ClearTextOnFocus = false,
+	}, frame)
+	bind(box, "PlaceholderColor3", "InactiveText")
+	local stroke = frame:FindFirstChildOfClass("UIStroke")
+	local focused, rejected = false, false
+	bind(stroke, "Color", function() return focused and Current.Accent or Current.Outline end)
+	box.Focused:Connect(function()
+		if Scrolling.Blocked() then
+			rejected = true
+			task.defer(function() box:ReleaseFocus() end)
+			return
+		end
+		focused = true
+		refresh(stroke)
+	end)
+	box.FocusLost:Connect(function()
+		if rejected then
+			rejected = false
+			return
+		end
+		focused = false
+		refresh(stroke)
+	end)
+
+	local button = new("TextButton", {
+		AnchorPoint = Vec2(1, 0), Position = Dim2(1, -1, 0, 1), Size = Offset(buttonW - 2, Metrics.InputH - 2),
+		Radius = Metrics.Radius, Border = "Outline", BackgroundTransparency = 0,
+	}, item.Frame)
+	interactive(button, "Element", "HoveredElement", "Inline")
+	addGradient(button)
+	centeredLabel(button, buttonW - 2, { Text = options.ButtonText or "Join", TextSize = 13, RowH = Metrics.InputH - 2 })
+
+	local object = { Item = item, Instance = box, Button = button, Callback = options.Callback }
+	function object:Set(text)
+		box.Text = text
+	end
+	Scrolling.Tap(button, function()
+		fire(object.Callback, box.Text)
+	end)
+	register(self, object, options, item)
+	return object
+end
+
 function Section:Listbox(options)
 	local height = options.Height or 177
 	local item = self:_item(height, "Listbox", options.Name, false)
@@ -4111,11 +4165,11 @@ function Window:BuildHome(tab, options)
 		end,
 	})
 	gameSection:Divider()
-	local jobBox = gameSection:Textbox({ Placeholder = "Paste a Job ID", NoSave = true })
-	gameSection:Button({
-		Name = "Join Job ID", Description = "Joins the server matching the Job ID typed above.",
-		Callback = function()
-			local id = string.gsub(jobBox.Instance.Text, "%s", "")
+	gameSection:InputButton({
+		Name = "Join Job ID", Placeholder = "Paste Job ID", ButtonText = "Join", NoSave = true,
+		Description = "Joins the server matching the Job ID typed in the box.",
+		Callback = function(text)
+			local id = string.gsub(text, "%s", "")
 			if id == "" then
 				self:Notify("Enter a Job ID first.", "Warning")
 			elseif id == game.JobId then
