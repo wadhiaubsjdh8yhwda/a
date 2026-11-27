@@ -1662,27 +1662,10 @@ end
 
 function Section:Divider()
 	local item = self:_item(Metrics.DividerH, "Divider", nil, false)
-	local y = floor(Metrics.DividerH / 2)
-	local fade = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.15, 0.4),
-		NumberSequenceKeypoint.new(0.5, 0),
-		NumberSequenceKeypoint.new(0.85, 0.4),
-		NumberSequenceKeypoint.new(1, 1),
-	})
-	local line = new("Frame", {
+	new("Frame", {
 		Bg = function() return Current.Outline:Lerp(Current.InactiveText, 0.45) end,
-		Position = Offset(0, y), Size = Dim2(1, 0, 0, 1),
+		Position = Offset(0, floor(Metrics.DividerH / 2)), Size = Dim2(1, 0, 0, 1),
 	}, item.Frame)
-	new("UIGradient", { Transparency = fade }, line)
-	local shine = new("Frame", {
-		Bg = "Text", BackgroundTransparency = 0.94, Position = Offset(0, y + 1), Size = Dim2(1, 0, 0, 1),
-	}, item.Frame)
-	new("UIGradient", { Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.5, 0),
-		NumberSequenceKeypoint.new(1, 1),
-	}) }, shine)
 	return item
 end
 
