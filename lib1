@@ -18,7 +18,7 @@ local Metrics = {
 	WindowW = 586, WindowH = 466, MinWindowW = 520, MinWindowH = 380, SidebarW = 141, ContentX = 142, ColumnW = 207,
 	TabW = 121, TabH = 28, TabPitch = 32, CategoryToTab = 25, TabToCategory = 25, FirstCategory = 56, SearchH = 28,
 	Row = 16, TopBar = 32, LineY = 24, HeaderH = 28, HeaderDescH = 42,
-	DividerH = 9, SliderH = 33, DropdownH = 47, InputH = 26, ButtonH = 28, ListRowH = 24,
+	DividerH = 5,, SliderH = 33, DropdownH = 47, InputH = 26, ButtonH = 28, ListRowH = 24,
 	ToggleW = 28, ToggleH = 16, ToggleKnob = 10, Knob = 11, PickerKnob = 8, TrackH = 9, TrackY = 24, TrackInset = 5,
 	ChipH = 16, ValueChipH = 17, Swatch = 14, ChipGap = 2,
     SidebarShut = 48, SidebarMin = 120, SidebarMax = 200,
@@ -863,7 +863,8 @@ local function lucideImage(name)
 	local result = false
 	local provider = lucideProvider()
 	if provider then
-for _, candidate in { name, "lucide-" .. name } do
+local alt = ({ house = "home", home = "house" })[name]
+for _, candidate in { name, "lucide-" .. name, alt, alt and ("lucide-" .. alt) } do
 	for _, request in { 48, false } do
 		local ok, asset = pcall(provider, candidate, request or nil)
 		if ok and asset then
@@ -1658,7 +1659,16 @@ end
 
 function Section:Divider()
 	local item = self:_item(Metrics.DividerH, "Divider", nil, false)
-	new("Frame", { Bg = "Element", Position = Offset(1, 1), Size = Dim2(1, -2, 1, -2), Radius = FULL, Border = "Outline" }, item.Frame)
+	local line = new("Frame", {
+		Bg = "Outline", Position = Offset(0, floor(Metrics.DividerH / 2)), Size = Dim2(1, 0, 0, 1),
+	}, item.Frame)
+	new("UIGradient", {
+		Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 1),
+			NumberSequenceKeypoint.new(0.5, 0),
+			NumberSequenceKeypoint.new(1, 1),
+		}),
+	}, line)
 	return item
 end
 
@@ -2465,7 +2475,8 @@ end
 
 local function sidebarStep(entry, before)
 	if entry.Kind == "Category" then return before and Metrics.TabToCategory or 0 end
-	return (before and before.Kind == "Category") and Metrics.CategoryToTab or Metrics.TabPitch
+	if not before then return Metrics.CategoryToTab end
+	return before.Kind == "Category" and Metrics.CategoryToTab or Metrics.TabPitch
 end
 
 function Window:_layoutSidebar(animated)
